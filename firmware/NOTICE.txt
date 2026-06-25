@@ -1,0 +1,6 @@
+Proprietary Dell/Broadcom ControlVault firmware blobs, copied verbatim from
+Canonical's OEM repo (see ../prebuilt/NOTICE.txt). They are CV3 "Citadel" images
+and are NOT flashed onto the CV2 chip (which runs its own resident firmware) --
+the driver only reads/validates their presence. No open license. For public
+forks, prefer fetching them via ../build_from_upstream.sh instead of committing
+them.

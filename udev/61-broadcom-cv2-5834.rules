@@ -1,0 +1,1 @@
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0a5c", ATTRS{idProduct}=="5834", ENV{LIBFPRINT_DRIVER}="Broadcom Sensors"
