@@ -1,37 +1,101 @@
 #!/usr/bin/env bash
-# Install the patched ControlVault2 fingerprint driver (prebuilt) and its assets.
-# Run from the repository root:  sudo ./install.sh   (or ./install.sh, it will sudo)
+# Historical filename retained for compatibility. This script only stages files
+# under this repository; it never installs into the running system.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-TOD_DIR=/usr/lib/x86_64-linux-gnu/libfprint-2/tod-1
-FW_DIR=/var/lib/fprint/fw
-SO="$HERE/prebuilt/libfprint-2-tod-1-broadcom.PATCHED.so"
+REPO="$(cd "$(dirname "$0")" && pwd)"
+DESTDIR="$REPO/stage/generic"
+LIBDIR="usr/lib"
+UDEVDIR="usr/lib/udev/rules.d"
+ARTIFACT="$REPO/prebuilt/libfprint-2-tod-1-broadcom-5833.probe.so"
 
-if [[ ! -f "$SO" ]]; then
-  echo "Prebuilt driver not found. Build it first:  ./build_from_upstream.sh" >&2
-  exit 1
+usage() {
+    cat <<'EOF'
+Usage: ./install.sh [options]
+
+Options:
+  --destdir DIR       Repository-local package root (default: stage/generic)
+  --libdir PATH       Relative library prefix (default: usr/lib)
+  --udevdir PATH      Relative udev rules directory
+  --artifact FILE     Repository-local patched plugin
+
+Despite its historical name, this is a staging tool. It refuses destinations
+outside ./stage and does not use sudo, reload udev, restart services, or alter
+authentication.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        --destdir)
+            DESTDIR="${2:?--destdir requires a value}"
+            shift 2
+            ;;
+        --libdir)
+            LIBDIR="${2:?--libdir requires a value}"
+            shift 2
+            ;;
+        --udevdir)
+            UDEVDIR="${2:?--udevdir requires a value}"
+            shift 2
+            ;;
+        --artifact)
+            ARTIFACT="${2:?--artifact requires a value}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+for relative_path in "$LIBDIR" "$UDEVDIR"; do
+    if [[ "$relative_path" == /* ||
+          "$relative_path" == ".." ||
+          "$relative_path" == ../* ||
+          "$relative_path" == */../* ||
+          "$relative_path" == */.. ]]; then
+        echo "library and udev paths must be safe relative paths: $relative_path" >&2
+        exit 2
+    fi
+done
+
+if [[ "$ARTIFACT" != /* ]]; then
+    ARTIFACT="$REPO/$ARTIFACT"
+fi
+if [[ ! -f "$ARTIFACT" ]]; then
+    echo "artifact not found: $ARTIFACT" >&2
+    exit 1
+fi
+ARTIFACT="$(realpath "$ARTIFACT")"
+if [[ "$ARTIFACT" != "$REPO"/* ]]; then
+    echo "refusing artifact outside repository: $ARTIFACT" >&2
+    exit 2
 fi
 
-SUDO=""; [[ $EUID -ne 0 ]] && SUDO="sudo"
+if [[ "$DESTDIR" != /* ]]; then
+    DESTDIR="$REPO/$DESTDIR"
+fi
+mkdir -p "$DESTDIR"
+DESTDIR="$(realpath "$DESTDIR")"
+if [[ "$DESTDIR" != "$REPO"/stage && "$DESTDIR" != "$REPO"/stage/* ]]; then
+    echo "refusing destination outside $REPO/stage: $DESTDIR" >&2
+    exit 2
+fi
 
-echo "[*] Installing driver -> $TOD_DIR"
-$SUDO mkdir -p "$TOD_DIR" "$FW_DIR"
-$SUDO install -m644 "$SO" "$TOD_DIR/libfprint-2-tod-1-broadcom.so"
+PLUGIN_DIR="$DESTDIR/$LIBDIR/libfprint-2/tod-1"
+RULE_DIR="$DESTDIR/$UDEVDIR"
+mkdir -p "$PLUGIN_DIR" "$RULE_DIR"
+install -m 0644 "$ARTIFACT" \
+    "$PLUGIN_DIR/libfprint-2-tod-1-broadcom.so"
+install -m 0644 "$REPO/udev/60-libfprint-2-tod1-broadcom-cv2.rules" \
+    "$RULE_DIR/60-libfprint-2-tod1-broadcom-cv2.rules"
 
-echo "[*] Installing firmware blobs -> $FW_DIR"
-$SUDO cp -n "$HERE"/firmware/* "$FW_DIR"/ 2>/dev/null || true
-
-echo "[*] Installing udev rule"
-$SUDO install -m644 "$HERE/udev/61-broadcom-cv2-5834.rules" /lib/udev/rules.d/61-broadcom-cv2-5834.rules
-$SUDO udevadm control --reload-rules
-$SUDO udevadm trigger
-
-echo "[*] Restarting fprintd"
-$SUDO systemctl restart fprintd || true
-
-echo
-echo "Done. Next:"
-echo "  fprintd-enroll        # enroll your finger (press, lift, repeat)"
-echo "  fprintd-verify        # test recognition"
-echo "  sudo pam-auth-update  # (optional) enable fingerprint login / sudo"
+echo "Files staged under: $DESTDIR"
+find "$DESTDIR" -type f -printf '%P\n' | sort

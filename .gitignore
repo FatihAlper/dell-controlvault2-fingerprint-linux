@@ -7,3 +7,23 @@ firmware/bcm_cv_current_version.txt
 # scratch
 test_*.so
 *.tmp
+.venv/
+.build.*/
+.local-test/
+stage/
+test-results/
+test-results/*.log
+__pycache__/
+*.py[cod]
+*.core
+core
+key.pem
+*.pfx
+*.p12
+*.key
+*.pem
+*.dll
+*.sys
+*.exe
+*.cab
+*.msi
