@@ -1,120 +1,197 @@
-# Dell ControlVault 2 fingerprint on Linux (Broadcom BCM5880, `0a5c:5834`)
+# Dell ControlVault 2 fingerprint on Linux
 
-Make the **Dell ControlVault 2 / Broadcom BCM5880 "USH"** fingerprint reader
-(USB ID **`0a5c:5834`**) work under Linux with `fprintd` / `libfprint`.
+Bring-up tooling and byte patches for the proprietary Broadcom TOD driver used
+with Dell ControlVault 2 / BCM5880 fingerprint devices:
 
-This reader is found on many **Dell Latitude** laptops (7390, 7480, **7490**,
-E7470, 5290, 5490, 5590, …). It has been considered *unsupported on Linux for
-about a decade* — `libfprint` does not recognise it, and Dell only ships a closed
-driver for the newer ControlVault **3** sensors.
+- `0a5c:5834` — the project's original target
+- `0a5c:5833` — probe support validated on a Dell Latitude 7390
 
-This repo patches that closed driver so it also drives the older CV2 chip.
+This is unofficial and is not affiliated with Dell, Broadcom, or Canonical.
+The stock driver is proprietary; generated binaries are intentionally ignored
+by Git.
 
-> ⚠️ **Unofficial.** Not affiliated with or endorsed by Dell, Broadcom or
-> Canonical. It patches a **proprietary** binary. Use it on hardware you own.
+## Current 5833 status
 
----
+The validated lifecycle is:
 
-## Is this for me?
-Run `lsusb`. If you see:
-
-```
-Bus 00x Device 00x: ID 0a5c:5834 Broadcom Corp. 5880
+```text
+enumeration -> plugin load -> probe -> open -> capture -> clean close
 ```
 
-…and `fprintd-enroll` says *"No devices available"*, this is for you.
+On the tested Latitude 7390:
 
----
-
-## Install
-
-This repo ships **only the patches**, not Dell's proprietary binary. The patched
-driver is built locally from Canonical's stock OEM driver. You need `git` and
-`python3`.
-
-```bash
-git clone https://github.com/grosa787/dell-controlvault2-fingerprint-linux
-cd dell-controlvault2-fingerprint-linux
-./build_from_upstream.sh     # fetch stock driver from Canonical's OEM repo + apply patches
-sudo ./install.sh            # install driver + udev rule + firmware, restart fprintd
-fprintd-enroll               # enroll a finger (press, lift, repeat ~4-8x)
-fprintd-verify               # test recognition
-sudo pam-auth-update         # (optional) enable fingerprint login & sudo
-```
-
-If an OS / `libfprint` update ever wipes it, run `./install.sh` again (re-run
-`./build_from_upstream.sh` first if the build was cleaned).
-
----
-
-## Status
-
-| Capability | State |
+| Check | Result |
 |---|---|
-| Device detected by `libfprint`/`fprintd` | ✅ works |
-| Open / power-on | ✅ works |
-| Fingerprint **capture** (sensor lights, grabs images) | ✅ works |
-| **Enroll** → `enroll-completed` (template committed on-chip) | ✅ works |
-| **Verify / match** (match-on-chip) | ✅ implemented (patches 4–5) — **please confirm on your unit** |
+| Interface 0 endpoints | `0x01` bulk OUT, `0x81` bulk IN, `0x85` interrupt IN |
+| `cv_get_ush_ver` (`0x39`) | 44-byte write, interrupt reply, 44-byte bulk reply |
+| TOD plugin load | `broadcom` / `Broadcom Sensors`, runtime table contains `0a5c:5833` |
+| Driver probe | `cv_get_ush_ver() status: 0x0`; expected CV2 chip-type result `0x1c`; probe completion |
+| Public open/close | Both complete successfully |
+| Capture retry | `0x89 → 0x8a → new capture` works on hardware |
+| Bounded `0x59` diagnostic | A single repeated update returns `0x89` and allows progress to continue |
+| Enrollment completion | Incomplete; completion remains zero |
+| Commit and verify | Not proven |
 
-The hard part is **match-on-chip**: the template lives in the chip's secure
-storage. Patches **4–5** route CV2's enrollment/verify status codes so the
-template actually commits and the match result is reported. This is the newest
-piece — if `fprintd-verify` gives `no-match`/`unknown-error` on your laptop,
-please open an issue with a debug log (below); CV2 units may use slightly
-different status codes that are trivial to add.
+Capture and retry recovery work on the tested BCM5880 device, but enrollment
+completion, template commit, and verification remain incomplete. The bounded
+`0x59` retry is a diagnostic experiment, not a production fix.
 
-> Tip while enrolling: **lift your finger completely between presses** and shift
-> its position a little each time. Failed grabs are ignored and harmless.
+A privacy-safe derived summary is in
+[the Latitude 7390 evidence record](docs/evidence/latitude-7390-0a5c-5833.md).
+Raw payloads and hardware logs are not published.
 
----
+## Safety boundary
 
-## Troubleshooting
+None of the documented bring-up commands install files into the running system.
+The scripts do not call `sudo`, `pacman`, `systemctl`, or `udevadm trigger`, and
+do not alter PAM or authentication.
 
-**Enable debug logging** (to read what the chip returns):
-```bash
-sudo mkdir -p /etc/systemd/system/fprintd.service.d
-printf '[Service]\nEnvironment=G_MESSAGES_DEBUG=all\nEnvironment=LIBFPRINT_DEBUG=3\n' \
-  | sudo tee /etc/systemd/system/fprintd.service.d/debug.conf
-sudo systemctl daemon-reload && sudo systemctl restart fprintd
-# reproduce, then:
-sudo journalctl -u fprintd --since "2 min ago" -o cat
+`install.sh` retains its historical name but is now only a repository-local
+`DESTDIR` staging tool. It refuses destinations outside `./stage`.
+
+## Staged USB probe
+
+Create a repository-local Python environment:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-probe.txt
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-- `Device status = (NN)` (decimal) during enroll, or `identify failed 0xNN`
-  during verify → that `NN` is the CV status to map. See `PATCHES.md` #4/#5.
-- Re-list / clear prints: `fprintd-list "$USER"`, `fprintd-delete "$USER"`.
+Run each hardware stage separately:
 
----
+```sh
+# No interface claim and no transfer
+.venv/bin/python docs/cv_usb_probe.py --pid 5833 --stage enumerate
 
-## How it works
-Five byte-level patches turn the CV3 driver into a CV2 driver. Full
-reverse-engineering write-up and the exact signatures are in
-**[PATCHES.md](PATCHES.md)**. The patcher (`patch_driver.py`) applies them by
-unique byte signature, so it survives minor upstream binary changes, and it
-reproduces the working driver **byte-for-byte**.
+# Claim and release interface 0; no transfer
+.venv/bin/python docs/cv_usb_probe.py --pid 5833 --stage open
 
-## Repo layout
-```
-install.sh              install the prebuilt driver + assets
-build_from_upstream.sh  fetch stock driver from Launchpad and patch it
-patch_driver.py         the 5 byte-patches (signature based)
-uninstall.sh            remove it
-prebuilt/               generated by build_from_upstream.sh (gitignored, proprietary)
-firmware/               generated by build_from_upstream.sh (gitignored, proprietary)
-udev/                   rule binding 0a5c:5834 to the driver
-PATCHES.md              reverse-engineering notes
+# Send exactly one allow-listed get-version command
+.venv/bin/python docs/cv_usb_probe.py \
+  --pid 5833 --stage command --command get-version
 ```
 
-## Legal / license
-The driver and firmware are **proprietary Dell/Canonical/Broadcom** artifacts,
-redistributed here only as a convenience for owners of the hardware. There is no
-open license on those binaries. If you publish a fork, prefer shipping **only**
-the patcher + `build_from_upstream.sh` and letting users pull the stock binary
-from Canonical's OEM repo themselves. The patches, scripts and docs in this repo
-are released under the MIT license.
+Other commands are blocked unless
+`--allow-stateful-command` is explicitly supplied.
+Payload bytes are redacted by default. `--show-payload` is intended only for
+private diagnosis; logs containing device payloads must not be published.
 
-## Credits
-Reverse-engineered from the shipped `.so` with `radare2` + `pyusb` on a Dell
-Latitude 7490. USB transport groundwork inspired by the NFC work in
-[`jacekkow/controlvault2-nfc-enable`](https://github.com/jacekkow/controlvault2-nfc-enable).
+## Build the probe-only plugin
+
+The source branch, source commit, and stock binary SHA-256 are pinned. The
+build aborts if Canonical's source changes before it is reviewed.
+
+```sh
+./build_from_upstream.sh --target-pid 5833 --patch-set probe
+```
+
+The output is:
+
+```text
+prebuilt/libfprint-2-tod-1-broadcom-5833.probe.so
+```
+
+`probe` applies patches 1-3 only. It intentionally leaves the original
+enrollment and verification code unchanged. See [PATCHES.md](PATCHES.md).
+
+## Repository-local TOD integration test
+
+Stock Arch `libfprint` does not provide the `libfprint-2-tod.so.1` ABI required
+by the proprietary plugin. The test environment therefore builds the
+`v1.95.2+tod1` loader entirely under `.local-test/`; it does not install or
+replace an Arch package.
+
+```sh
+tools/prepare_local_tod_test.sh
+
+tools/run_local_tod_test.sh --stage load
+tools/run_local_tod_test.sh --stage probe
+tools/run_local_tod_test.sh --stage open
+```
+
+The stages are intentionally separate:
+
+- `load` loads the plugin and prints the runtime driver/USB ID table without
+  USB enumeration.
+- `probe` enumerates USB and succeeds only if the Broadcom device survives the
+  driver's async probe.
+- `open` performs the same probe, then public TOD open and close operations.
+
+Each runner has a 20-second timeout and writes an ignored log under
+`test-results/`.
+
+On Arch systems where runtime GLib is installed but the `glib-mkenums` build
+tool is absent, the preparation script fetches the exact installed GLib tag and
+generates that tool under `.local-test/`. It never writes `/usr/bin`.
+
+## Arch/CachyOS staging
+
+Validate and mirror the Arch filesystem layout under the repository:
+
+```sh
+packaging/arch/stage.sh
+```
+
+This produces:
+
+```text
+stage/arch/usr/lib/libfprint-2/tod-1/libfprint-2-tod-1-broadcom.so
+stage/arch/usr/lib/udev/rules.d/60-libfprint-2-tod1-broadcom-cv2.rules
+```
+
+No rule is loaded and no plugin is installed. See
+[packaging/arch/README.md](packaging/arch/README.md).
+
+For other distributions, `install.sh --help` exposes relative `--libdir` and
+`--udevdir` staging parameters instead of assuming Ubuntu's multiarch paths.
+
+## Repository layout
+
+```text
+build_from_upstream.sh       pinned stock fetch + repository-local build
+patch_driver.py              PID-aware probe/full byte patcher
+docs/cv_usb_probe.py         staged raw USB transport probe
+tests/                       patcher and packet unit tests
+tools/cv_tod_probe.c         minimal public libfprint probe/open harness
+tools/prepare_local_tod_test.sh
+tools/run_local_tod_test.sh
+udev/                        rules for validated CV2 PIDs
+packaging/arch/              Arch-only repository staging
+PATCHES.md                   patch rationale and observed evidence
+docs/controlvault2-command-status-reference.md
+                             inferred command/status dictionary
+```
+
+## Known limitation
+
+The proprietary plugin reports a CV3 chip-type error (`0x1c`) on BCM5880 after
+a successful `cv_get_ush_ver`. Probe patch 3 routes that known CV2 condition to
+the driver's success path. This is justified by the observed device response,
+but it does not prove that every higher-level enrollment or matching status is
+identical between `5833` and `5834`.
+
+The experimental enrollment harness is repository-local, opt-in, and
+fail-closed. It preserves the observed `0x89` re-arm behavior and performs at
+most one diagnostic repeated update after `0x59`. It does not implement the
+missing BCM5880 host-side completion coordinator. Patch 4 is not enabled for
+the tested `5833` profile.
+
+## Research scope
+
+This repository contains independently derived interoperability research for
+Linux support of lawfully owned Broadcom ControlVault2 hardware.
+
+Command names marked as inferred are not official Broadcom terminology.
+
+No proprietary binaries, firmware, cryptographic keys, raw fingerprint
+features, biometric templates, personal identifiers, or authentication
+credentials are included.
+
+## License and redistribution
+
+The scripts, tests, rules, and documentation are MIT licensed. The Broadcom TOD
+driver and firmware are proprietary and are not covered by that license. A
+public fork should ship only the patching/build machinery and let users fetch
+the pinned stock binary from Canonical.
