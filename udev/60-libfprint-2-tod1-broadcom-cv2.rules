@@ -1,0 +1,4 @@
+# ControlVault 2 devices validated by this project.
+# Access is provided by the distribution's normal security-device/uaccess rules.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0a5c", ATTRS{idProduct}=="5833", ENV{LIBFPRINT_DRIVER}="Broadcom Sensors"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0a5c", ATTRS{idProduct}=="5834", ENV{LIBFPRINT_DRIVER}="Broadcom Sensors"

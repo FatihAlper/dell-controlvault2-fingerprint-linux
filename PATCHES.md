@@ -1,51 +1,109 @@
-# Reverse-engineering notes & patch rationale
+# Reverse-engineering notes and patch rationale
 
-The fingerprint sensor on many Dell Latitude laptops (e.g. **7390/7480/7490**,
-E7470, 5590, …) is a **Broadcom BCM5880 "USH" / Dell ControlVault 2**, exposed
-on USB as `0a5c:5834`. It is a secure micro-controller that does **match-on-chip**
-fingerprint over a vendor-specific interface. Open-source `libfprint` does not
-support it, and the community considered it unsupported for ~10 years.
+Command/status names in this document are inferred unless an evidence section
+explicitly says otherwise. See
+[`docs/controlvault2-command-status-reference.md`](docs/controlvault2-command-status-reference.md)
+for confidence and provenance.
 
-Dell/Canonical *do* ship a closed binary driver — `libfprint-2-tod-1-broadcom.so`
-(a libfprint "TOD" / Touch-OEM-Driver) — but it targets the newer **ControlVault 3
-"Citadel"** sensors (`0a5c:5842/5843/5844/5845`). This project makes that binary
-drive the older CV2 `0a5c:5834` by patching the few places where it is
-hard-wired to CV3.
+## Devices and scope
 
-## How the device actually talks (recovered from the driver's `processCommand`)
-- Interface **0** (class `0xFE`, "USH w/touch sensor") is the fingerprint channel.
-  Endpoints: bulk OUT `0x01`, bulk IN `0x81`, interrupt IN `0x85`.
-- The driver sends a **raw 44-byte "CV command"** to bulk OUT `0x01` (no SPI
-  wrapper), then reads a 32-byte status from interrupt IN `0x85`, then the
-  payload from bulk IN `0x81`.
-- The 44-byte CV header (from `cvhEncapsulateCmd`):
-  `+0x00 u32=1 | +0x04 u32 total_len | +0x08 u16 command_id | +0x0a u16 flags |
-   +0x0c u32 lib_ver | +0x28 u32 num_params | +0x2c params…`
-- The CV2 chip answers correctly (`cv_get_ush_ver` returns status `0x0`), proving
-  the protocol is shared between CV2 and CV3 — only the high-level driver gates
-  differ.
+The original project targets ControlVault 2 / BCM5880 USB ID `0a5c:5834`.
+This branch adds a separately selectable `0a5c:5833` target.
 
-## The 5 patches (applied by `patch_driver.py` via unique byte signatures)
+The tested `5833` device on a Dell Latitude 7390 exposes interface 0 with:
 
-| # | Site | Change | Why |
-|---|------|--------|-----|
-| 1 | `.rodata` id_table | USB PID `0x5842` → `0x5834` | so libfprint binds **our** device to this driver |
-| 2 | device enumerator | PID-filter `je` → `jmp` (`74`→`eb`) | so the driver's libusb path also accepts `0x5834` |
-| 3 | `dev_probe` | firmware-check err `0x1c` handled as success (`je` disp `1f`→`3a`) | the CV3 driver can't match our BCM5880 to a "Citadel" chip type and aborts; CV2 already runs resident firmware, so **nothing is flashed** — we just skip the bogus upgrade check |
-| 4 | enroll state machine | CV2 status `0x59` routed to the normal status-`0` path | `0x59` is CV2's "enrollment data ready"; the stock driver treats it as a fatal `Device status = (89)`. Routing it correctly lets the **COMMIT** phase run so the template is actually stored in the chip |
-| 5 | verify completion | drop the `edx!=0` short-circuit (6× `nop`) | CV2 returns a non-zero verify status the CV3 code doesn't know, so it completed without calling `verify_report` → `verify-unknown-error`. Now `verify_report` is always called and the match result is honored |
+- bulk OUT `0x01`
+- bulk IN `0x81`
+- interrupt IN `0x85`
 
-Patches 1–3 get the device **recognized, opened and capturing**.
-Patches 4–5 are about actually **storing and matching** a template (match-on-chip).
+That endpoint equality alone suggested a shared transport but was not treated
+as proof of protocol compatibility.
 
-## Tools used
-`radare2`, `objdump`, `nm`, `readelf`, `pyusb`. No source — everything was
-recovered by disassembly of the shipped `.so` and live USB probing on a real
-Latitude 7490.
+## Observed 5833 protocol evidence
 
-## Status / caveats
-- `0x59` / `0x89` are CV2 status codes recovered empirically. If your unit
-  reports different codes during enroll/verify, capture `journalctl -u fprintd`
-  with debug logging (see README) and the dispatch can be extended.
-- This is an **unofficial** patch of a **proprietary** binary. It is not endorsed
-  by Dell, Broadcom or Canonical. Use on hardware you own.
+The staged raw probe sent one 44-byte `cv_get_ush_ver` command (`0x39`) to
+endpoint `0x01`.
+
+Observed sequence:
+
+1. The complete 44-byte request was accepted.
+2. Interrupt endpoint `0x85` returned an 8-byte completion response.
+3. Bulk endpoint `0x81` returned a 44-byte encapsulated response with command
+   ID `0x39`.
+4. The proprietary driver's own probe later logged
+   `cv_get_ush_ver() status: (0x0)`.
+
+This proves that `5833` implements the command framing and completion/bulk
+response flow expected by this ControlVault driver. Fields whose semantics
+have not been established are intentionally not assigned guessed meanings.
+Raw request and response payloads are retained locally and are not published.
+
+## Stock binary identity
+
+The patcher is tested against Canonical's `upstream` branch:
+
+```text
+commit: f7d31fcb9f6952d7d76ba50287e000c29760589d
+stock SHA-256: 54fa3befc02df393077cebf96e018e3bf752cee61509897d945ab18c58c5e172
+ELF Build ID: 66134403db205c7c1ac682885229224790aedc0e
+```
+
+`build_from_upstream.sh` rejects a different commit or binary checksum. The
+patcher additionally requires every byte signature to occur exactly once.
+
+## Patch sets
+
+`patch_driver.py` exposes two explicit sets:
+
+- `probe`: patches 1-3 only
+- `full`: patches 1-5, retaining the original project's enrollment/verify
+  experiments
+
+The `5833` validation uses only `probe`. Both the patcher and build wrapper
+reject `5833/full`; legacy patches 4 and 5 remain available only for the
+project's original `5834` target.
+
+| # | Site | Change | Technical reason |
+|---|---|---|---|
+| 1 | `.rodata` ID table | CV3 PID `0x5842` → selected CV2 PID (`0x5833` or `0x5834`) | Lets the TOD loader bind the selected device to `Broadcom Sensors`. |
+| 2 | internal USB enumerator | conditional PID branch `0x74` → unconditional branch `0xeb` | The plugin has a second CV3-only PID gate after libfprint binding. The public ID table from patch 1 remains the outer device-selection boundary. |
+| 3 | `dev_probe` | error `0x1c` branch displacement `0x1f` → `0x3a` | On tested `5833`, the CV command succeeds (`0x0`) and then CV3 chip classification returns `0x1c`. BCM5880 is CV2, so the CV3 firmware classification cannot identify it. Routing this observed condition to completion lets probe finish without flashing firmware. |
+| 4 | enroll state machine | status `0xa4` comparison/path → original project's CV2 `0x59` path | Existing `5834` enrollment experiment; not included in the `5833` probe artifact and not validated on `5833`. |
+| 5 | verify completion | remove `edx != 0` short-circuit | Existing `5834` verification experiment; not included in the `5833` probe artifact and not validated on `5833`. |
+
+For the pinned stock binary, probe patch offsets are:
+
+```text
+1: 0x2f620
+2: 0x28403
+3: 0x0d1b8
+```
+
+Offsets are evidence only. Application is signature-based and
+offset-independent.
+
+## Runtime probe evidence
+
+Using a repository-local build of `libfprint-tod` `v1.95.2+tod1`:
+
+```text
+Loading driver broadcom (Broadcom Sensors)
+Supported Devices: ..., 0a5c:5833, ...
+dev_probe() called
+cv_get_ush_ver() status: (0x0)
+Could not determine chip type
+FwUpgradeError ... Error: 0x1c
+Device reported probe completion
+```
+
+The resulting `FpContext` contains one `broadcom` device. Public
+`fp_device_open_sync` and `fp_device_close_sync` also complete. No
+enrollment, verify, identify, list, delete, authentication, PAM, or login call
+is part of this test.
+
+## Remaining uncertainty
+
+The evidence is sufficient to conclude that `5833` is supportable through
+plugin load, transport, probe, open, and close. It is not sufficient to claim
+that template storage or match-on-chip status codes are identical to `5834`.
+Those phases require a separate, explicitly authorized test plan.
