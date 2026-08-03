@@ -11,17 +11,22 @@ TARGET="$LOCAL/tod-drivers/libfprint-2-tod-1-broadcom-5833.probe.so"
 PRELOAD="$EXPERIMENT/libcv2-enrollment-0x89-rearm.so"
 HARNESS="$EXPERIMENT/cv_tod_enrollment_experiment"
 CONFIRMED=no
+UPDATE_POLICY=legacy-repeat
 CHILD_PID=""
 
 usage() {
     cat <<'EOF'
 Usage:
-  tools/run_local_enrollment_0x89_test.sh --confirm-real-enrollment
+  tools/run_local_enrollment_0x89_test.sh --confirm-real-enrollment [--fresh-boundary]
 
 WARNING: this exercises real enrollment. If all stages succeed, the
 ControlVault driver may commit a fingerprint template inside the device.
 Nothing is installed and no PAM, GNOME, udev, systemd, or system libfprint
 configuration is changed.
+
+--fresh-boundary sends one update per fresh capture, preserves native 0x59,
+and converts a native nonzero completion into a fatal cleanup before the
+unchanged state machine can enter generic commit.
 EOF
 }
 
@@ -29,6 +34,10 @@ while (($#)); do
     case "$1" in
         --confirm-real-enrollment)
             CONFIRMED=yes
+            shift
+            ;;
+        --fresh-boundary)
+            UPDATE_POLICY=fresh-stop-before-commit
             shift
             ;;
         -h|--help)
@@ -76,10 +85,15 @@ export FP_TOD_DRIVERS_DIR="$LOCAL/tod-drivers"
 export FP_DRIVERS_ALLOWLIST="broadcom"
 export G_MESSAGES_DEBUG="all"
 export CV2_0X89_TARGET_PATH="$TARGET_CANONICAL"
+export CV2_ENROLLMENT_UPDATE_POLICY="$UPDATE_POLICY"
 
 mkdir -p "$REPO/test-results"
 STAMP="$(date --iso-8601=seconds | tr ':' '-')"
-LOG="$REPO/test-results/enrollment-0x59-single-update-retry-$STAMP.log"
+if [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
+    LOG="$REPO/test-results/enrollment-fresh-boundary-$STAMP.log"
+else
+    LOG="$REPO/test-results/enrollment-0x59-single-update-retry-$STAMP.log"
+fi
 
 cleanup() {
     local signal="${1:-TERM}"
@@ -96,8 +110,15 @@ trap 'cleanup TERM; exit 143' TERM
     echo "evidence_timestamp=$(date --iso-8601=seconds)"
     echo "$VALIDATION"
     echo "evidence_scope=repository-local logical command logging; not USBPcap"
-    echo "experiment=bounded single repeated UpdateEnrollment after native 0x59"
-    echo "retry_limit=one additional 0x6C call per intercepted invocation"
+    if [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
+        echo "experiment=fresh capture per update; stop before native completion commit"
+        echo "same_update_retry=disabled"
+        echo "native_completion_policy=return fatal status to existing cleanup"
+    else
+        echo "experiment=bounded single repeated UpdateEnrollment after native 0x59"
+        echo "retry_limit=one additional 0x6C call per intercepted invocation"
+    fi
+    echo "update_policy=$CV2_ENROLLMENT_UPDATE_POLICY"
     echo "interposer_target=$CV2_0X89_TARGET_PATH"
     echo "warning=successful enrollment may commit a device template"
 } | tee "$LOG"

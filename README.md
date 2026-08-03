@@ -28,13 +28,16 @@ On the tested Latitude 7390:
 | Driver probe | `cv_get_ush_ver() status: 0x0`; expected CV2 chip-type result `0x1c`; probe completion |
 | Public open/close | Both complete successfully |
 | Capture retry | `0x89 → 0x8a → new capture` works on hardware |
-| Bounded `0x59` diagnostic | A single repeated update returns `0x89` and allows progress to continue |
+| Bounded `0x59` diagnostic | A single repeated update returns `0x89`; Windows controls do not use this retry |
+| Fresh-boundary diagnostic | One accepted update was followed by fresh `0x66`, but no between-capture `0x8a`; later touches did not complete |
 | Enrollment completion | Incomplete; completion remains zero |
 | Commit and verify | Not proven |
 
 Capture and retry recovery work on the tested BCM5880 device, but enrollment
 completion, template commit, and verification remain incomplete. The bounded
-`0x59` retry is a diagnostic experiment, not a production fix.
+`0x59` retry is a diagnostic experiment, not a production fix. Windows runtime
+controls show both a successful four-`0x6c` path and two failed paths where the
+fourth `0x6c` receives a shorter protected reply followed by `0x6d` discard.
 
 A privacy-safe derived summary is in
 [the Latitude 7390 evidence record](docs/evidence/latitude-7390-0a5c-5833.md).
@@ -173,10 +176,24 @@ but it does not prove that every higher-level enrollment or matching status is
 identical between `5833` and `5834`.
 
 The experimental enrollment harness is repository-local, opt-in, and
-fail-closed. It preserves the observed `0x89` re-arm behavior and performs at
-most one diagnostic repeated update after `0x59`. It does not implement the
-missing BCM5880 host-side completion coordinator. Patch 4 is not enabled for
-the tested `5833` profile.
+fail-closed. Its historical default preserves the observed `0x89` re-arm
+behavior and performs at most one diagnostic repeated update after `0x59`.
+The preferred next-test mode disables that replay and blocks native completion
+before generic commit:
+
+```sh
+tools/run_local_enrollment_0x89_test.sh \
+  --confirm-real-enrollment --fresh-boundary
+```
+
+The fresh-boundary policy was run once on hardware. It reached `1/10`, issued
+a fresh `0x66`, and then waited without completing another capture despite
+four lift-and-touch attempts. The trace had no `0x8a` between the accepted
+incomplete update and that fresh capture, unlike the successful Windows
+control. No `0x6e` or `0x6f` commit command was reached, and the device stayed
+at `0a5c:5833`. The next candidate is a separately tested re-arm after native
+success with completion zero. Patch 4 is not enabled for the tested `5833`
+profile.
 
 ## Research scope
 

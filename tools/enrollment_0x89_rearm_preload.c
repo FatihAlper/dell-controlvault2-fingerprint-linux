@@ -2,10 +2,11 @@
  * Repository-local, experimental enrollment interposer.
  *
  * The only interposed driver function is cv_fingerprint_update_enrollment().
- * A 0x59 result causes exactly one additional call to the same real update
- * function with the same arguments.  The second native result is then
- * returned unchanged, except that the existing 0x89 handling described
- * below still applies.
+ * The default legacy-repeat policy makes exactly one additional call after
+ * 0x59, preserving the original diagnostic behavior.  The explicitly
+ * selected fresh-stop-before-commit policy never repeats 0x59 and blocks a
+ * native nonzero completion before the outer state machine can enter generic
+ * commit.
  *
  * A 0x89 result causes the existing target-local
  * cv_cmd_enrollment_started()/0x8a function to run before the original 0x89
@@ -39,6 +40,15 @@
 #define CV_STATUS_ENROLL_MORE 0x8fu
 #define CV_STATUS_EXPERIMENT_FAILURE 0x100003u
 #define CV2_TARGET_ENV "CV2_0X89_TARGET_PATH"
+#define CV2_UPDATE_POLICY_ENV "CV2_ENROLLMENT_UPDATE_POLICY"
+#define CV2_POLICY_LEGACY "legacy-repeat"
+#define CV2_POLICY_FRESH "fresh-stop-before-commit"
+
+typedef enum
+{
+  UPDATE_POLICY_LEGACY_REPEAT,
+  UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT,
+} UpdatePolicy;
 
 typedef uint32_t (*cv_cmd_enrollment_started_fn) (void);
 typedef uint32_t (*cv_fingerprint_update_enrollment_fn) (
@@ -68,6 +78,7 @@ typedef struct
   void *handle;
   cv_fingerprint_update_enrollment_fn update;
   cv_cmd_enrollment_started_fn enrollment_started;
+  UpdatePolicy update_policy;
   bool ready;
   char failure[512];
 } ResolverCache;
@@ -189,6 +200,7 @@ static void
 initialize_resolver (void)
 {
   const char *configured_path = getenv (CV2_TARGET_ENV);
+  const char *configured_policy = getenv (CV2_UPDATE_POLICY_ENV);
   LoadedSearch search = { 0 };
   void *update_address;
   void *enrollment_started_address;
@@ -201,6 +213,24 @@ initialize_resolver (void)
                         configured_path != NULL ? configured_path : "<unset>");
       return;
     }
+
+  if (configured_policy == NULL ||
+      strcmp (configured_policy, CV2_POLICY_LEGACY) == 0)
+    resolver.update_policy = UPDATE_POLICY_LEGACY_REPEAT;
+  else if (strcmp (configured_policy, CV2_POLICY_FRESH) == 0)
+    resolver.update_policy = UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT;
+  else
+    {
+      resolver_failure ("invalid %s: %s",
+                        CV2_UPDATE_POLICY_ENV,
+                        configured_policy);
+      return;
+    }
+  fprintf (stderr,
+           "[cv2-enrollment-policy] selected=%s\n",
+           resolver.update_policy == UPDATE_POLICY_LEGACY_REPEAT
+             ? CV2_POLICY_LEGACY
+             : CV2_POLICY_FRESH);
   fprintf (stderr,
            "[cv2-0x89-resolver] expected target path: %s\n",
            search.expected.path);
@@ -356,7 +386,29 @@ cv_fingerprint_update_enrollment (uint32_t handle,
                             completion_out,
                             enrollment_data_out,
                             output_value_out);
-  if (status == CV_STATUS_UPDATE_AGAIN_EXPERIMENT)
+  if (resolver.update_policy == UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT)
+    {
+      fprintf (stderr,
+               "[cv2-fresh-boundary] native UpdateEnrollment status=0x%x\n",
+               status);
+      log_update_outputs ("native",
+                          completion_out,
+                          enrollment_data_out,
+                          output_value_out);
+      if (status == CV_STATUS_UPDATE_AGAIN_EXPERIMENT)
+        fprintf (stderr,
+                 "[cv2-fresh-boundary] preserving native 0x59 without "
+                 "same-update replay\n");
+      if (status == CV_STATUS_SUCCESS &&
+          (completion_out == NULL || *completion_out != 0))
+        {
+          fprintf (stderr,
+                   "[cv2-fresh-boundary] native completion boundary "
+                   "observed; blocking state 2 and generic commit\n");
+          return CV_STATUS_EXPERIMENT_FAILURE;
+        }
+    }
+  else if (status == CV_STATUS_UPDATE_AGAIN_EXPERIMENT)
     {
       fprintf (stderr,
                "[cv2-0x59-experiment] 0x59 UpdateEnrollment result "
