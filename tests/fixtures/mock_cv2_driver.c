@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifndef OMIT_UPDATE
 static unsigned int update_count;
@@ -194,6 +195,8 @@ mock_run_enrollment (void)
   uint32_t status;
   unsigned char enrollment_id[20] = { 0 };
   unsigned char auxiliary_input[4] = { 0xa1, 0xa2, 0xa3, 0xa4 };
+  const void *auxiliary_input_pointer = auxiliary_input;
+  uint32_t auxiliary_input_size = sizeof auxiliary_input;
   uint8_t completion = 0x31;
   unsigned char enrollment_output[20];
   uint32_t output_value = 0x51525354;
@@ -207,6 +210,11 @@ mock_run_enrollment (void)
       fprintf (stderr, "invalid MOCK_SEQUENTIAL_UPDATE_COUNT\n");
       abort ();
     }
+  if (getenv ("MOCK_ZERO_AUXILIARY_INPUT") != NULL)
+    {
+      auxiliary_input_pointer = NULL;
+      auxiliary_input_size = 0;
+    }
 
   for (size_t index = 0; index < sizeof enrollment_output; index++)
     enrollment_output[index] = (unsigned char) (0x40 + index);
@@ -214,8 +222,8 @@ mock_run_enrollment (void)
   status = cv_fingerprint_update_enrollment (
     1,
     enrollment_id,
-    sizeof auxiliary_input,
-    auxiliary_input,
+    auxiliary_input_size,
+    auxiliary_input_pointer,
     &completion,
     enrollment_output,
     &output_value);
@@ -227,13 +235,17 @@ mock_run_enrollment (void)
        index < sequential_updates && status == 0;
        index++)
     {
+      if (getenv ("MOCK_COPY_OUTPUT_TO_NEXT_ID") != NULL)
+        memcpy (enrollment_id, enrollment_output, sizeof enrollment_id);
+      else if (getenv ("MOCK_CHANGE_ENROLLMENT_ID_EACH_UPDATE") != NULL)
+        memset (enrollment_id, (int) index, sizeof enrollment_id);
       (void) cv_fingerprint_capture_start (
         1, 2, 0x23, enrollment_id, NULL, NULL);
       status = cv_fingerprint_update_enrollment (
         1,
         enrollment_id,
-        sizeof auxiliary_input,
-        auxiliary_input,
+        auxiliary_input_size,
+        auxiliary_input_pointer,
         &completion,
         enrollment_output,
         &output_value);
@@ -251,8 +263,8 @@ mock_run_enrollment (void)
           status = cv_fingerprint_update_enrollment (
             1,
             enrollment_id,
-            sizeof auxiliary_input,
-            auxiliary_input,
+            auxiliary_input_size,
+            auxiliary_input_pointer,
             &completion,
             enrollment_output,
             &output_value);

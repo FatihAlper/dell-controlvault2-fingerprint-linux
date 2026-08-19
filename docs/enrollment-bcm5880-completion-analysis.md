@@ -521,7 +521,7 @@ in one session and fails in others, and why Linux repeatedly reaches raw
 
 ## Ranked next work
 
-### 1. Instrument generic `0x6c` call-level inputs and accumulator state
+### 1. Compare generic `0x6c` state above the protection boundary
 
 Rank: first.
 
@@ -539,6 +539,25 @@ their semantics. The next instrumentation must remain above that protection
 boundary and record only capture mode, session/enrollment ID lifetime, update
 input length, output-buffer provenance, counters, and whether accepted output
 is fed into the next call. It must not log buffer contents.
+
+The Linux call-level portion is now also complete. In a 20-update hardware
+trace, all calls used auxiliary-input length zero. Each call received a fresh
+capture-ID pointer and fresh 20-byte value. Each of the three native successes
+wrote a nonzero 20-byte enrollment output and zeroed the 32-bit output value,
+while completion remained zero. The next call received a different, newly
+zeroed output buffer; neither its capture ID nor any length-bearing auxiliary
+input carried the previous output. Native `0x89` and the final native `0x59`
+left all output fields unchanged.
+
+This runtime result agrees with the static Linux task layout: incomplete
+progress is reported through synthetic `0x8f`, while only the final native
+completion path retains update output for generic commit. It does not prove
+that intermediate output must be fed back to generic `0x6c`, because the
+firmware may maintain an internal accumulator. The next comparison must target
+the Windows adapter immediately before protection or statically recover its
+generic update argument construction: capture mode, selector values, optional
+input length/provenance, and session-state choice. Content must remain
+unlogged.
 
 ### 2. Re-arm after each accepted incomplete Linux update — completed
 

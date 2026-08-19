@@ -206,6 +206,10 @@ tools/run_local_enrollment_0x89_test.sh \
   --confirm-real-enrollment --fresh-rearm-boundary
 ```
 
+Call-level provenance can be recorded without pointer addresses or buffer
+contents by adding `--trace-update-metadata`. The trace is opt-in and does not
+change native statuses or add another interposed function.
+
 It is covered by mock tests. Its first hardware control produced five native
 `0x89` quality rejections, each with successful normal re-arm, so the new
 accepted-incomplete branch was not exercised. Cancellation and close completed
@@ -233,6 +237,12 @@ preceding `0x66` response, including the update that returned `0x59`. Windows
 success and failure used the same four-request transport shape and first
 diverged at the fourth response length. See
 [the privacy-safe structural comparison](docs/evidence/update-enrollment-structural-comparison.md).
+
+A follow-up call-level trace confirmed that every accepted Linux update writes
+a nonzero 20-byte output, but the next update receives a new zeroed output
+buffer, zero auxiliary-input length, and a fresh capture ID that does not match
+the previous output. The final `0x59` writes none of its output fields. See
+[the redacted metadata evidence](docs/evidence/update-enrollment-call-metadata.md).
 
 ## Research scope
 

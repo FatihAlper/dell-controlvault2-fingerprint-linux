@@ -294,6 +294,85 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         self.assertIn("readiness=failed", result.stdout)
         self.assertNotIn("command 0x6C", result.stdout)
 
+    def test_metadata_trace_is_disabled_by_default(self) -> None:
+        result = self.run_loader(MOCK_FIRST_UPDATE_STATUS="0")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("[cv2-update-metadata] selected=disabled", result.stdout)
+        self.assertNotIn("phase=before", result.stdout)
+        self.assertNotIn("phase=after", result.stdout)
+
+    def test_invalid_metadata_trace_fails_before_hardware_command(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="verbose",
+            mode="ready-failure",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("invalid CV2_UPDATE_METADATA_TRACE", result.stdout)
+        self.assertIn("readiness=failed", result.stdout)
+        self.assertNotIn("command 0x6C", result.stdout)
+
+    def test_metadata_trace_reports_relations_without_values(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="1",
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_SECOND_UPDATE_STATUS="0x59",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="2",
+            MOCK_ZERO_AUXILIARY_INPUT="1",
+            MOCK_CHANGE_ENROLLMENT_ID_EACH_UPDATE="1",
+            MOCK_FIRST_OUTPUT_BYTE="0x53",
+            MOCK_FIRST_OUTPUT_VALUE="0x54555657",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        metadata = "\n".join(
+            line
+            for line in result.stdout.splitlines()
+            if "[cv2-update-metadata]" in line
+        )
+        for marker in (
+            "selected=enabled",
+            "call=1 phase=before handle_relation=first",
+            "enrollment_id_content_relation=first",
+            "auxiliary_size=0 auxiliary_presence=null",
+            "call=1 phase=after native_status=0x0",
+            "completion_post_zero=yes completion_changed=yes",
+            "enrollment_output_changed=yes",
+            "output_value_changed=yes",
+            "call=2 phase=before handle_relation=same",
+            "enrollment_id_pointer_relation=same",
+            "enrollment_id_content_relation=changed",
+            "enrollment_id_matches_previous_output=no",
+            "call=2 phase=after native_status=0x59",
+        ):
+            self.assertIn(marker, metadata)
+        self.assertNotIn("0x53", metadata)
+        self.assertNotIn("0x54555657", metadata)
+
+    def test_metadata_trace_detects_previous_output_as_next_id(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="1",
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_SECOND_UPDATE_STATUS="0x59",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="2",
+            MOCK_COPY_OUTPUT_TO_NEXT_ID="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "call=2 phase=before handle_relation=same",
+            result.stdout,
+        )
+        self.assertIn(
+            "enrollment_id_matches_previous_output=yes",
+            result.stdout,
+        )
+
     def test_fresh_policy_preserves_0x59_without_replay(self) -> None:
         result = self.run_loader(
             CV2_ENROLLMENT_UPDATE_POLICY="fresh-stop-before-commit",
@@ -663,6 +742,11 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         )
         self.assertIn(
             "multiple enrollment boundary modes selected; refusing ambiguity",
+            runner,
+        )
+        self.assertIn("--trace-update-metadata", runner)
+        self.assertIn(
+            'export CV2_UPDATE_METADATA_TRACE="$TRACE_METADATA"',
             runner,
         )
 
