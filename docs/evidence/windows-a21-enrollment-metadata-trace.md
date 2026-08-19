@@ -195,6 +195,45 @@ generic route and CaptureStart-to-Update input relationship.  It is intended
 only to answer which commit/discard calls follow a complete enrollment while
 minimizing synchronous instrumentation on the capture path.
 
+## Successful minimal completion trace
+
+A live reduced-mode run completed Windows Hello enrollment successfully.  Its
+entire observed operation sequence was:
+
+```text
+UpdateEnrollment -> 0x00
+UpdateEnrollment -> 0x00
+UpdateEnrollment -> 0x00
+UpdateEnrollment -> 0x00
+CSS_FingerprintCommitEnrollment
+  cv_fingerprint_commit_enrollment -> 0x00
+CSS_FingerprintCommitEnrollment -> 0x00
+CSS_FingerprintCommitEnrollment
+  cv_fingerprint_commit_enrollment -> 0x00
+CSS_FingerprintCommitEnrollment -> 0x00
+Windows Hello enrollment success
+```
+
+The nested CSS/raw hook pairs represent two commit operations, not four.
+Neither `CSS_FingerprintCommitFeatureSet` nor
+`cv_fingerprint_commit_feature_set` ran.  No discard hook ran.  Thus this A21
+success used exactly four successful UpdateEnrollment calls followed by two
+successful CommitEnrollment calls.
+
+The raw commit export is the statically identified generic command-`0x6e`
+builder.  This names the operation family behind the two `0x6e` completion
+calls seen in the earlier successful USB trace.  It does not prove that the
+two calls have identical arguments or semantics; the USB replies had different
+sizes, and the minimal tracer deliberately inspected no arguments.  A Linux
+implementation must therefore not duplicate commit merely from the count
+without first reconstructing why Windows submits two calls.
+
+After Hello closed and Frida detached with `exit`, the `0a5c:5833` host device
+was live-detached from the still-running VM.  Linux immediately enumerated the
+same `5833` identity.  This provides a clean post-test control and avoids
+asking the legacy Windows lower-filter stack to process guest shutdown while
+it still owns the USB function.
+
 ## Evidence interpretation
 
 The most important fields are:

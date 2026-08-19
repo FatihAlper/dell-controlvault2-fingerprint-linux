@@ -70,7 +70,7 @@ Counts in the successful visible path:
 |---|---:|---|
 | `0x6c` | 4 | One after each accepted capture. |
 | `0x8a` | 3 | Between accepted captures. |
-| `0x6e` | 2 | Two differently sized completion-stage replies. |
+| `0x6e` | 2 | Two differently sized replies; later function-level tracing identified both calls as CommitEnrollment. |
 | `0x6f` | 0 | No visible application-message header used this opcode. |
 
 The fourth accepted update is followed directly by the completion-stage
@@ -134,11 +134,14 @@ enrollment on this exact device/firmware selection must expose command `0x6f`
 on USB. The analyzed Windows binary still contains the statically recovered
 four-feature/`0x6f` path, but this successful run did not visibly select it.
 
-The two `0x6e` operations must not yet be treated as semantically identical.
-Their response sizes differ substantially and their protected payloads were
-not interpreted. The trace proves ordering, opcode, direction, and length; it
-does not prove whether either operation creates, exports, stores, or commits a
-template.
+Later minimal function-level tracing observed a successful Hello enrollment
+perform four successful UpdateEnrollment calls followed by two nested
+`CSS_FingerprintCommitEnrollment` / `cv_fingerprint_commit_enrollment` pairs,
+all returning zero.  This identifies both `0x6e` operations as the
+CommitEnrollment family.  They still must not be treated as semantically
+identical: their USB response sizes differ substantially, their protected
+payloads were not interpreted, and the minimal trace deliberately recorded no
+arguments.  The reason Windows performs two commits remains unresolved.
 
 The successful and failed controls narrow the immediate question to why a
 fourth generic-looking `0x6c` is sometimes accepted and sometimes rejected.

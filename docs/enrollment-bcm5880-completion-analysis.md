@@ -681,7 +681,10 @@ commit, and normal cleanup closed the device.
 - The 20-byte enrollment output remained zero.
 - State 2 and commit were not reached.
 - One Windows runtime enrollment accepted four `0x6c` updates and then used
-  two differently shaped `0x6e` operations before Hello reported success.
+  two differently shaped `0x6e` operations before Hello reported success. A
+  later minimal function trace independently observed four zero-status updates
+  followed by two zero-status CommitEnrollment calls and Hello success; no
+  CommitFeatureSet or discard call ran.
 - Two Windows controls independently accepted three updates, returned a
   shorter protected reply for the fourth, and discarded with `0x6d`.
 - A later control reset from `0a5c:5833` to single-interface `0a5c:5831`;
