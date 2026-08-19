@@ -81,16 +81,24 @@ local mock harness with `-Wall -Wextra -Werror`. It verifies:
 
 ## Remaining gates before any hardware integration
 
-The scaffold deliberately does not answer these unresolved questions:
+Read-only static analysis now recovers the exact five-argument Linux
+`cv_fingerprint_capture_get_result` ABI and eleven-argument
+`cv_fingerprint_create_template` ABI. A separately compile-gated adapter
+exercises both layouts against injected mocks; see
+`docs/evidence/linux-bcm5880-export-abis.md`. This answers the calling-
+convention part of the first two questions, but not their data semantics or
+runtime suitability.
 
-1. Which Linux capture API and exact ABI provide the same variable-length
-   feature record used by the Windows selected path?
-2. Does the exported Linux `cv_fingerprint_create_template` ABI accept the
-   reconstructed four feature pairs exactly as inferred?
+The remaining gates are:
+
+1. Which `capture_get_result` selector/status yields the Windows-equivalent
+   variable-length feature record, and is its byte format actually identical?
+2. Does the Linux template primitive accept those four feature records
+   semantically, rather than merely accepting the recovered ABI layout?
 3. Is the selected coordinator actually appropriate for this device's Linux
    failure, given the successful Windows generic-looking runtime sequence?
 4. What is the full selected commit ABI, retained-template ownership, cleanup,
    and persistence behavior?
 
-Those require read-only ABI work and mock adapters first. A real callback
-adapter, hardware flag, or commit path must be reviewed as a separate change.
+Those require a separately reviewed, capture-only evidence step. A real symbol
+resolver, hardware flag, or commit path remains outside this scaffold.

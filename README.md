@@ -164,8 +164,12 @@ tools/compare_cv_usb_updates.py
                              payload-redacting UpdateEnrollment comparison
 tools/audit_windows_a21_update.py
                              read-only A21 cross-adapter dataflow validator
+tools/audit_linux_bcm5880_abis.py
+                             read-only pinned Linux export ABI validator
 tools/bcm5880_enrollment_coordinator.[ch]
                              compile-gated mock-only 3+1 coordinator core
+tools/bcm5880_linux_abi_adapter.[ch]
+                             mock-only five/eleven-argument ABI adapter
 udev/                        rules for validated CV2 PIDs
 packaging/arch/              Arch-only repository staging
 PATCHES.md                   patch rationale and observed evidence
