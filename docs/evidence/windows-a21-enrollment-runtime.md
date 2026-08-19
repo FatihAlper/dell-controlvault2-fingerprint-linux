@@ -147,6 +147,12 @@ host-side `0x6f` transition was required. Initialization parameters,
 capture-result inputs, accumulator state, and session/mode selection require
 comparison before changing Linux completion or commit behavior.
 
+A later payload-redacting comparison reassembled the split USB messages and
+confirmed that all three Windows sessions use the same four-request
+header/length/flag shape. Their first structural divergence is the fourth
+response: 124 bytes on success and 76 bytes in both failures. See
+[the UpdateEnrollment structural comparison](update-enrollment-structural-comparison.md).
+
 ## Reproduction helper
 
 `tools/summarize_cv_usb_pcap.py` prints only message-header metadata from a

@@ -54,7 +54,7 @@ Repository-local tests prove:
 - capture, commit, verify, cancel, and discard functions are not interposed;
 - the target DSO remains hash-validated and is not modified.
 
-The full suite currently reports 50 passing tests.
+The full suite currently reports 58 passing tests.
 
 ## Hardware result
 

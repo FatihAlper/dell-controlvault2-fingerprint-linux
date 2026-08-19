@@ -160,6 +160,8 @@ tests/                       patcher and packet unit tests
 tools/cv_tod_probe.c         minimal public libfprint probe/open harness
 tools/prepare_local_tod_test.sh
 tools/run_local_tod_test.sh
+tools/compare_cv_usb_updates.py
+                             payload-redacting UpdateEnrollment comparison
 udev/                        rules for validated CV2 PIDs
 packaging/arch/              Arch-only repository staging
 PATCHES.md                   patch rationale and observed evidence
@@ -224,6 +226,13 @@ update. Its USB trace contained eight `0x66`, eight `0x6c`, and eight `0x8a`
 request/response pairs with zero packet loss. Four intervening `0x89` quality
 retries were preserved. The run again stopped before replay or commit and
 closed the device cleanly.
+
+Offline comparison of the two Linux controls and three Windows controls found
+that every Linux `0x6c` carried the fresh 20-byte value from its immediately
+preceding `0x66` response, including the update that returned `0x59`. Windows
+success and failure used the same four-request transport shape and first
+diverged at the fourth response length. See
+[the privacy-safe structural comparison](docs/evidence/update-enrollment-structural-comparison.md).
 
 ## Research scope
 

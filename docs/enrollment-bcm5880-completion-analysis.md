@@ -521,30 +521,34 @@ in one session and fails in others, and why Linux repeatedly reaches raw
 
 ## Ranked next work
 
-### 1. Compare generic `0x6c` inputs and accumulator state
+### 1. Instrument generic `0x6c` call-level inputs and accumulator state
 
 Rank: first.
 
-Compare the Linux and Windows paths before the fourth update: capture mode,
-session/enrollment ID lifetime, update input length, completion/output buffer
-initialization, and whether each accepted output is fed into the next call.
-Protected biometric payloads should remain private; structural lengths,
-selectors, counter values, and buffer provenance are sufficient initial
-evidence.
+The on-wire structural portion is complete. Across both decisive Linux runs,
+the only changing request range was the 20 bytes at request offsets 64--83,
+and it matched offsets 52--71 of the immediately preceding `0x66` response on
+every update, including the update that returned `0x59`. A stale or mismatched
+capture ID is therefore not supported.
 
-### 2. Re-arm after each accepted incomplete Linux update
+Windows success and two Windows failures used the same four-request header,
+length, and flag shape. Their first structural divergence was the fourth
+response: 124 bytes on success and 76 bytes on both failures. The variable
+Windows request regions are protected, so the wire capture cannot compare
+their semantics. The next instrumentation must remain above that protection
+boundary and record only capture mode, session/enrollment ID lifetime, update
+input length, output-buffer provenance, counters, and whether accepted output
+is fed into the next call. It must not log buffer contents.
+
+### 2. Re-arm after each accepted incomplete Linux update — completed
 
 Rank: second.
 
-The fresh-boundary run proved that the stock state machine issues a new
-`0x66` after an accepted update without replaying `0x6c`. That capture did not
-complete despite four lift-and-touch attempts. The trace lacked `0x8a`
-between the accepted incomplete update and the new `0x66`, whereas the
-successful Windows control contained three between-capture `0x8a` operations
-for four accepted updates. The next bounded experiment should therefore call
-the already resolved native `0x8a` re-arm after status zero/completion zero,
-then allow exactly one fresh native capture. It must retain the existing stop
-before completion/commit boundary.
+The fail-closed `fresh-rearm-stop-before-commit` policy answered this question
+twice: native `0x8a` after accepted incomplete progress allowed every following
+fresh `0x66` to complete. Both decisive sessions still returned native `0x59`
+after three accepted updates. Re-arm fixes capture continuation but not the
+fourth-update boundary.
 
 ### 3. Retain the selected `0x6f` path as an alternate implementation lead
 
