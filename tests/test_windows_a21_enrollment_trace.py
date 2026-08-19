@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 TRACE = TOOLS / "windows_a21_enrollment_trace.js"
+MINIMAL_TRACE = TOOLS / "windows_a21_completion_trace.js"
 RUNNER = TOOLS / "run_windows_a21_enrollment_trace.ps1"
 
 
@@ -14,6 +15,7 @@ class WindowsA21EnrollmentTraceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.trace = TRACE.read_text(encoding="utf-8")
+        cls.minimal_trace = MINIMAL_TRACE.read_text(encoding="utf-8")
         cls.runner = RUNNER.read_text(encoding="utf-8")
 
     def test_trace_is_valid_javascript(self):
@@ -27,6 +29,14 @@ class WindowsA21EnrollmentTraceTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+        minimal_result = subprocess.run(
+            [node, "--check", str(MINIMAL_TRACE)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(minimal_result.returncode, 0, minimal_result.stderr)
 
     def test_trace_has_exact_a21_hooks_and_selector(self):
         required = (
@@ -65,6 +75,32 @@ class WindowsA21EnrollmentTraceTests(unittest.TestCase):
         self.assertIn("pointer_logging: 'disabled'", self.trace)
         self.assertNotIn("String(error)", self.trace)
         self.assertIn("reason: 'hook_install_failed'", self.trace)
+
+    def test_minimal_trace_has_no_capture_hooks_or_memory_access(self):
+        self.assertNotIn("CSS_FingerprintCapture", self.minimal_trace)
+        self.assertNotIn("CSS_FingerprintSetCaptureMode", self.minimal_trace)
+        self.assertNotIn("UPDATE_SELECTOR_TEST_RVA", self.minimal_trace)
+        for value in (
+            "readU8",
+            "readU16",
+            "readU32",
+            "readPointer",
+            "readByteArray",
+            "hexdump",
+            "Memory.",
+            "send(",
+        ):
+            with self.subTest(value=value):
+                self.assertNotIn(value, self.minimal_trace)
+        self.assertIn("CSS_FingerprintUpdateEnrollment", self.minimal_trace)
+        self.assertIn("CSS_FingerprintCommitEnrollment", self.minimal_trace)
+        self.assertIn("CSS_FingerprintDiscardEnrollment", self.minimal_trace)
+        self.assertEqual(self.minimal_trace.count("console.log("), 1)
+
+    def test_runner_exposes_explicit_minimal_completion_mode(self):
+        self.assertIn("[switch]$MinimalCompletionTrace", self.runner)
+        self.assertIn('"windows_a21_completion_trace.js"', self.runner)
+        self.assertIn('"minimal-completion"', self.runner)
 
     def test_runner_requires_confirmation_before_process_inspection(self):
         guard = self.runner.index("if (-not $ConfirmPrivacySafeTrace)")

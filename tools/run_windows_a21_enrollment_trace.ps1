@@ -2,6 +2,7 @@
 param(
     [int]$TargetProcessId = 0,
     [switch]$ConfirmPrivacySafeTrace,
+    [switch]$MinimalCompletionTrace,
     [string]$OutputDirectory = ""
 )
 
@@ -107,18 +108,26 @@ if ($null -eq $frida) {
     throw "frida CLI not found. Install matching frida-tools in the Windows VM."
 }
 
-$script = Join-Path $PSScriptRoot "windows_a21_enrollment_trace.js"
+$scriptName = if ($MinimalCompletionTrace) {
+    "windows_a21_completion_trace.js"
+}
+else {
+    "windows_a21_enrollment_trace.js"
+}
+$script = Join-Path $PSScriptRoot $scriptName
 if (-not (Test-Path -LiteralPath $script)) {
     throw "Trace script is missing: $script"
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$log = Join-Path $OutputDirectory "windows-a21-enrollment-metadata-$stamp.log"
+$traceKind = if ($MinimalCompletionTrace) { "minimal-completion" } else { "full-metadata" }
+$log = Join-Path $OutputDirectory "windows-a21-$traceKind-$stamp.log"
 
 Write-Host "payload_logging=disabled"
 Write-Host "pointer_logging=disabled"
 Write-Host "binary_modification=none"
+Write-Host "trace_kind=$traceKind"
 Write-Host "target_process_id=$TargetProcessId"
 Write-Host "evidence_file=$log"
 Write-Host "Attach is read-only instrumentation but may restart WbioSrvc if it crashes."

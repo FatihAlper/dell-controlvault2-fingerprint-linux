@@ -168,6 +168,33 @@ interaction.  Future runs must complete or explicitly cancel Hello, detach
 Frida with `exit`, and verify the biometric session is idle before guest
 shutdown.
 
+## Reduced completion-only follow-up
+
+A second full-tracer attempt reached two successful CaptureStart returns but
+Windows Hello did not advance to UpdateEnrollment.  Exiting Frida, closing
+Settings, and restarting `WbioSrvc` recovered the session without a guest
+reboot.  This repetition makes the full tracer unsuitable for further live
+completion attempts on this legacy stack, even though it does not establish
+which individual hook or timing change caused the stall.
+
+The explicit `-MinimalCompletionTrace` runner mode instead loads
+`windows_a21_completion_trace.js`.  It installs no CaptureStart, capture-mode,
+buffer, pointer, or internal-route observation.  It reads no process memory
+and emits only UpdateEnrollment return statuses plus commit/discard function
+ordering and return statuses:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\tools\run_windows_a21_enrollment_trace.ps1 `
+  -ConfirmPrivacySafeTrace `
+  -MinimalCompletionTrace
+```
+
+The reduced mode relies on the first trace for the already-established
+generic route and CaptureStart-to-Update input relationship.  It is intended
+only to answer which commit/discard calls follow a complete enrollment while
+minimizing synchronous instrumentation on the capture path.
+
 ## Evidence interpretation
 
 The most important fields are:
