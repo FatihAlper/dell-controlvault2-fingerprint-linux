@@ -65,6 +65,19 @@ optional_u32_from_env (const char *name, uint32_t *value)
   return 1;
 }
 
+static int
+buffer_is_zero (const void *buffer, size_t size)
+{
+  const unsigned char *bytes = buffer;
+
+  if (buffer == NULL)
+    return 0;
+  for (size_t index = 0; index < size; index++)
+    if (bytes[index] != 0)
+      return 0;
+  return 1;
+}
+
 #ifndef OMIT_REARM
 uint32_t
 cv_cmd_enrollment_started (void)
@@ -115,6 +128,21 @@ cv_fingerprint_update_enrollment (uint32_t handle,
   (void) handle;
 
   update_count++;
+  fprintf (stderr,
+           "[mock-cv2] update input_zero=%s\n",
+           buffer_is_zero (enrollment_id, 20) ? "yes" : "no");
+  if (getenv ("MOCK_REQUIRE_ZERO_ENROLLMENT_ID") != NULL &&
+      !buffer_is_zero (enrollment_id, 20))
+    {
+      fprintf (stderr, "[mock-cv2] required zero update input missing\n");
+      abort ();
+    }
+  if (update_count == 1 && enrollment_id != NULL &&
+      getenv ("MOCK_MUTATE_FIRST_ENROLLMENT_ID") != NULL)
+    {
+      ((unsigned char *) enrollment_id)[0] = 0x5a;
+      fprintf (stderr, "[mock-cv2] mutated first update input\n");
+    }
   if (update_count == 1)
     {
       status = status_from_env ("MOCK_FIRST_UPDATE_STATUS", 0x89);
@@ -194,6 +222,7 @@ mock_run_enrollment (void)
 {
   uint32_t status;
   unsigned char enrollment_id[20] = { 0 };
+  const void *enrollment_id_pointer = enrollment_id;
   unsigned char auxiliary_input[4] = { 0xa1, 0xa2, 0xa3, 0xa4 };
   const void *auxiliary_input_pointer = auxiliary_input;
   uint32_t auxiliary_input_size = sizeof auxiliary_input;
@@ -204,6 +233,7 @@ mock_run_enrollment (void)
     "MOCK_SEQUENTIAL_UPDATE_COUNT", 1);
   int defer_capture_completion =
     getenv ("MOCK_DEFER_CAPTURE_COMPLETION") != NULL;
+  uint8_t initial_enrollment_id_byte;
 
   if (sequential_updates == 0 || sequential_updates > 16)
     {
@@ -215,13 +245,20 @@ mock_run_enrollment (void)
       auxiliary_input_pointer = NULL;
       auxiliary_input_size = 0;
     }
+  if (optional_byte_from_env ("MOCK_INITIAL_ENROLLMENT_ID_BYTE",
+                              &initial_enrollment_id_byte))
+    memset (enrollment_id,
+            initial_enrollment_id_byte,
+            sizeof enrollment_id);
+  if (getenv ("MOCK_NULL_ENROLLMENT_ID") != NULL)
+    enrollment_id_pointer = NULL;
 
   for (size_t index = 0; index < sizeof enrollment_output; index++)
     enrollment_output[index] = (unsigned char) (0x40 + index);
 
   status = cv_fingerprint_update_enrollment (
     1,
-    enrollment_id,
+    enrollment_id_pointer,
     auxiliary_input_size,
     auxiliary_input_pointer,
     &completion,
@@ -243,7 +280,7 @@ mock_run_enrollment (void)
         1, 2, 0x23, enrollment_id, NULL, NULL);
       status = cv_fingerprint_update_enrollment (
         1,
-        enrollment_id,
+        enrollment_id_pointer,
         auxiliary_input_size,
         auxiliary_input_pointer,
         &completion,
@@ -262,7 +299,7 @@ mock_run_enrollment (void)
         {
           status = cv_fingerprint_update_enrollment (
             1,
-            enrollment_id,
+            enrollment_id_pointer,
             auxiliary_input_size,
             auxiliary_input_pointer,
             &completion,

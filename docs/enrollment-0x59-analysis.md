@@ -249,24 +249,27 @@ argument 5  stack                     4-byte output
 
 Attach allocates the 0x290-byte EngineContext with `HEAP_ZERO_MEMORY`.
 Inspection of all callback targets in the returned WBF engine interface found
-no adapter-side write or other address-taking reference to the 20-byte range
-at `EngineContext+0x18`; the UpdateEnrollment call is its only address-taking
-reference. This proves zero initialization on the first call and supports,
-but does not absolutely prove across dynamically called code, stable zero
-content on later calls.
+no direct adapter-side field write or other direct address-taking reference to
+the 20-byte range at `EngineContext+0x18`; the UpdateEnrollment call is its
+only direct address-taking reference. This proves allocation-time zeroing, not
+call-time content: whole-context pointers and dynamically dispatched code are
+outside that direct-reference result.
 
 Because argument 4 is false, `CSS_FingerprintUpdateEnrollment` forwards
 auxiliary size zero and pointer null. Its internal generic dispatcher
 registers argument 1 as a 20-byte input and builds command `0x6c`. This has the
 same seven-argument shape as Linux but a different observed input lifetime:
 Linux received a fresh capture-derived 20-byte value on every hardware call,
-whereas Windows statically supplies a fixed, initially zero context field.
+whereas Windows statically supplies a fixed context field whose call-time
+content is not established.
 
 This rules out optional auxiliary input as the missing Windows state on the
-generic path. It does not yet prove that substituting a zero 20-byte Linux
-input is sufficient or safe to commit. Full instruction anchors, artifact
-hashes, limitations, and a read-only validator are in
-[the Windows A21 argument record](evidence/windows-a21-update-arguments-static.md).
+generic path. A fail-closed hardware test subsequently showed that a stable
+zero Linux input accepts no updates (`0x89` seven times, then `0x88`), while an
+adjacent fresh-input control accepts three before returning `0x59`. Stable zero
+is therefore not the Windows-equivalent fix. See
+[the hardware record](evidence/zero-update-input-hardware.md) and
+[the corrected Windows A21 argument record](evidence/windows-a21-update-arguments-static.md).
 
 ## Windows BCM5880-specific update path
 

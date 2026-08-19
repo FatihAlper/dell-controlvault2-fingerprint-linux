@@ -560,17 +560,20 @@ EngineAdapter passes a fixed `EngineContext+0x18` 20-byte input, hard-codes the
 optional auxiliary-data flag false, and supplies a persistent 20-byte output
 at `inner+0x2c`. The 0x290-byte EngineContext is allocated with
 `HEAP_ZERO_MEMORY`; no adapter callback directly writes or takes the address of
-that 20-byte input range before UpdateEnrollment. The CSS wrapper consequently
-forwards auxiliary size zero and pointer null to the generic `0x6c`
+that 20-byte input range before UpdateEnrollment. This direct scan does not
+cover indirect whole-context writes or CSS in/out behavior. The CSS wrapper
+consequently forwards auxiliary size zero and pointer null to the generic `0x6c`
 dispatcher. See
 [the static Windows argument record](evidence/windows-a21-update-arguments-static.md).
 
 This rules out hidden auxiliary data as the generic Windows/Linux difference
-and identifies a bounded mismatch: Linux passes a fresh capture-derived
-20-byte input while Windows passes a stable, initially zero context field.
-Static analysis does not yet prove that this mismatch alone causes `0x59`.
-The next experiment should vary only this input, remain fail-closed, and stop
-before commit unless native completion and all required outputs are present.
+and identifies a storage-lifetime difference, but the bounded input experiment
+now rejects the simplest interpretation. Stable zero accepted no updates
+(`0x89` seven times, then `0x88`); an adjacent original-input control accepted
+three before the established `0x59` boundary. Neither completed or committed.
+See [the hardware record](evidence/zero-update-input-hardware.md). The next
+comparison must recover call-time write/dataflow provenance for the Windows
+field, including indirect callbacks and possible CSS in/out mutation.
 
 ### 2. Re-arm after each accepted incomplete Linux update — completed
 

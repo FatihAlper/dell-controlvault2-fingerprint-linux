@@ -8,6 +8,8 @@
  * native nonzero completion before the outer state machine can enter generic
  * commit.  The fresh-rearm variant additionally sends one target-local 0x8a
  * after each accepted incomplete update, with a four-update hard stop.
+ * The zero-input fresh-rearm variant has the same boundaries and changes only
+ * the required 20-byte UpdateEnrollment input to a stable all-zero buffer.
  *
  * A 0x89 result causes the existing target-local
  * cv_cmd_enrollment_started()/0x8a function to run before the original 0x89
@@ -46,7 +48,10 @@
 #define CV2_POLICY_LEGACY "legacy-repeat"
 #define CV2_POLICY_FRESH "fresh-stop-before-commit"
 #define CV2_POLICY_FRESH_REARM "fresh-rearm-stop-before-commit"
+#define CV2_POLICY_ZERO_INPUT_FRESH_REARM \
+  "zero-input-fresh-rearm-stop-before-commit"
 #define CV2_MAX_ACCEPTED_UPDATES 4u
+#define CV2_MAX_ZERO_INPUT_UPDATES 24u
 #define CV2_ENROLLMENT_VALUE_SIZE 20u
 
 typedef enum
@@ -54,6 +59,7 @@ typedef enum
   UPDATE_POLICY_LEGACY_REPEAT,
   UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT,
   UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT,
+  UPDATE_POLICY_ZERO_INPUT_FRESH_REARM_STOP_BEFORE_COMMIT,
 } UpdatePolicy;
 
 typedef uint32_t (*cv_cmd_enrollment_started_fn) (void);
@@ -103,6 +109,9 @@ static ResolverCache resolver;
 static atomic_uint retry_attempt = 0;
 static atomic_uint accepted_incomplete_count = 0;
 static atomic_uint update_call_count = 0;
+static atomic_uint zero_input_update_count = 0;
+/* Writable in case the proprietary ABI treats this nominal input as in/out. */
+static unsigned char zero_update_input[CV2_ENROLLMENT_VALUE_SIZE] = { 0 };
 
 typedef struct
 {
@@ -133,8 +142,17 @@ update_policy_name (UpdatePolicy policy)
       return CV2_POLICY_FRESH;
     case UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT:
       return CV2_POLICY_FRESH_REARM;
+    case UPDATE_POLICY_ZERO_INPUT_FRESH_REARM_STOP_BEFORE_COMMIT:
+      return CV2_POLICY_ZERO_INPUT_FRESH_REARM;
     }
   return "<invalid>";
+}
+
+static bool
+update_policy_rearms_accepted (UpdatePolicy policy)
+{
+  return policy == UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT ||
+         policy == UPDATE_POLICY_ZERO_INPUT_FRESH_REARM_STOP_BEFORE_COMMIT;
 }
 
 static void
@@ -264,6 +282,9 @@ initialize_resolver (void)
     resolver.update_policy = UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT;
   else if (strcmp (configured_policy, CV2_POLICY_FRESH_REARM) == 0)
     resolver.update_policy = UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT;
+  else if (strcmp (configured_policy, CV2_POLICY_ZERO_INPUT_FRESH_REARM) == 0)
+    resolver.update_policy =
+      UPDATE_POLICY_ZERO_INPUT_FRESH_REARM_STOP_BEFORE_COMMIT;
   else
     {
       resolver_failure ("invalid %s: %s",
@@ -681,6 +702,7 @@ cv_fingerprint_update_enrollment (uint32_t handle,
                                   uint32_t *output_value_out)
 {
   MetadataBeforeCall metadata_before = { 0 };
+  const void *effective_enrollment_id = enrollment_id;
   uint32_t status;
   uint32_t rearm_status;
   unsigned int attempt;
@@ -696,16 +718,50 @@ cv_fingerprint_update_enrollment (uint32_t handle,
       return CV_STATUS_EXPERIMENT_FAILURE;
     }
 
+  if (resolver.update_policy ==
+      UPDATE_POLICY_ZERO_INPUT_FRESH_REARM_STOP_BEFORE_COMMIT)
+    {
+      unsigned int zero_input_call;
+
+      if (enrollment_id == NULL)
+        {
+          fprintf (stderr,
+                   "[cv2-zero-input] required source input is null; "
+                   "refusing before native UpdateEnrollment\n");
+          return CV_STATUS_EXPERIMENT_FAILURE;
+        }
+      zero_input_call = atomic_fetch_add_explicit (&zero_input_update_count,
+                                                   1,
+                                                   memory_order_relaxed)
+                        + 1;
+      if (zero_input_call > CV2_MAX_ZERO_INPUT_UPDATES)
+        {
+          fprintf (stderr,
+                   "[cv2-zero-input] total update limit reached; "
+                   "refusing native UpdateEnrollment call=%u limit=%u\n",
+                   zero_input_call,
+                   CV2_MAX_ZERO_INPUT_UPDATES);
+          return CV_STATUS_EXPERIMENT_FAILURE;
+        }
+      memset (zero_update_input, 0, sizeof zero_update_input);
+      effective_enrollment_id = zero_update_input;
+      fprintf (stderr,
+               "[cv2-zero-input] native UpdateEnrollment call=%u/%u "
+               "input=stable-zero-20 source_bytes_read=no\n",
+               zero_input_call,
+               CV2_MAX_ZERO_INPUT_UPDATES);
+    }
+
   if (resolver.metadata_trace)
     metadata_before = metadata_before_update (handle,
-                                              enrollment_id,
+                                              effective_enrollment_id,
                                               auxiliary_input_size,
                                               auxiliary_input,
                                               completion_out,
                                               enrollment_data_out,
                                               output_value_out);
   status = resolver.update (handle,
-                            enrollment_id,
+                            effective_enrollment_id,
                             auxiliary_input_size,
                             auxiliary_input,
                             completion_out,
@@ -738,8 +794,7 @@ cv_fingerprint_update_enrollment (uint32_t handle,
                    "observed; blocking state 2 and generic commit\n");
           return CV_STATUS_EXPERIMENT_FAILURE;
         }
-      if (resolver.update_policy ==
-            UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT &&
+      if (update_policy_rearms_accepted (resolver.update_policy) &&
           status == CV_STATUS_SUCCESS && completion_out != NULL &&
           *completion_out == 0)
         {

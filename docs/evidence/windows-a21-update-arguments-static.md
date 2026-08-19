@@ -56,13 +56,12 @@ range `0x18`--`0x2b` separately. `CreateEnrollment` only changes fields in the
 inner state.
 
 A scan of every WBF callback address in the returned interface, from Attach
-through ControlUnitPrivileged, found only one adapter-side address-taking
-reference to the outer `EngineContext+0x18` field: the call above. It found no
-direct adapter-side write to that 20-byte range. This establishes that the
-field is zero on its first UpdateEnrollment call. It is strong evidence that
-the field remains a stable zero-filled input across enrollment, but it is not
-a whole-program proof that code below the dynamically resolved CSS call can
-never mutate caller memory.
+through ControlUnitPrivileged, found only one direct adapter-side
+address-taking reference to the outer `EngineContext+0x18` field: the call
+above. It found no direct adapter-side write to that 20-byte range. This proves
+the allocation's initial state, but not the field's value at UpdateEnrollment
+time: a whole-context pointer can cross an indirect callback, and code below a
+dynamically resolved call can mutate caller memory.
 
 The adapter also hard-codes argument 4 to false. Therefore the optional
 auxiliary-data construction inside the CSS wrapper is not selected by this
@@ -132,18 +131,21 @@ exposes a concrete argument-lifetime mismatch:
 | Property | Linux observed runtime | Windows A21 generic static path |
 |---|---|---|
 | 20-byte input storage | fresh per update | fixed `EngineContext+0x18` |
-| Initial content | capture-derived, nonzero/variable | zero from `HEAP_ZERO_MEMORY` |
+| Call-time content | capture-derived, nonzero/variable | not established; allocation begins zero |
 | Auxiliary input | size 0 | false -> size 0, pointer null |
 | 20-byte output storage | fresh per update | fixed `inner+0x2c` |
 
-The comparison does **not** prove that zeroing Linux's 20-byte input is the
-complete fix. The field's protocol name is still unknown, protected Windows
-request content cannot be compared directly, and downstream code could impose
-additional state. It does, however, replace the earlier broad “compare Windows
-arguments” task with one bounded hypothesis suitable for a fail-closed Linux
-experiment: change only the 20-byte generic update input lifetime/content,
-stop before commit unless native completion and all required outputs are
-produced, and never replay a rejected command.
+The bounded stable-zero hardware experiment is now complete. It accepted zero
+updates (`0x89` seven times, then `0x88`), while an adjacent fresh-input control
+accepted three updates before reaching the known `0x59` boundary. Neither
+session completed or committed. Thus stable zero is not the Windows-equivalent
+fix; see [the hardware record](zero-update-input-hardware.md).
+
+The experiment also corrects the static interpretation: zero allocation plus
+the absence of a direct field writer is insufficient to establish call-time
+content. The next task is exact write/dataflow provenance for
+`EngineContext+0x18`, including indirect callbacks and possible in/out use by
+the CSS layer, rather than another guessed Linux replacement value.
 
 ## Reproduction
 
