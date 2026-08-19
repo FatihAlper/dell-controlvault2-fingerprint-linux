@@ -563,11 +563,10 @@ Current Linux hardware evidence has completion zero and no validated token.
 Forcing state 2 can invoke generic commit without matching retained state and
 does not reproduce either observed Windows sequence.
 
-## Minimal next experiment design — not implemented
+## Accepted-incomplete re-arm experiment — completed
 
-The next hardware experiment should isolate one question: does `0x8a` after
-an accepted incomplete update allow the following fresh `0x66` capture to
-complete reliably?
+The experiment isolated one question: does `0x8a` after an accepted incomplete
+update allow the following fresh `0x66` capture to complete reliably?
 
 1. Start one new enrollment session in a fresh process.
 2. Issue one `0x6c` per newly completed capture. When it returns native zero
@@ -590,6 +589,35 @@ Limit accepted progress to four fresh updates. This design matches the
 between-capture re-arm shape of the successful Windows control and cannot
 accidentally loop past the completion boundary.
 
+The repository-local `fresh-rearm-stop-before-commit` policy implements this
+boundary and passes mock tests. Its first hardware control produced five native
+`0x89` results, so every observed `0x8a` was ordinary bad-capture recovery.
+Clean cancellation issued `0x68`, two `0x6d` operations, and close `0x04`;
+no completion or commit opcode was reached.
+
+A second hardware control exercised the accepted-incomplete branch three
+times. After each native status-zero/completion-zero update, native `0x8a`
+succeeded and the following fresh `0x66` capture completed. This directly
+answers the experiment's narrow question: the added re-arm is sufficient to
+continue fresh capture after accepted incomplete progress on this stack.
+
+The following update, at the fourth-update boundary after three accumulated
+progress samples, returned native `0x59`. The policy did
+not replay that `0x6c`, synthesize success, force state 2, or reach `0x6e` or
+`0x6f`. Existing cleanup completed and the device closed normally. Therefore
+the capture hang caused by a missing between-update `0x8a` and the native
+fourth-update `0x59` are separate problems.
+
+An independent 2026-08-19 session reproduced this result. Its eight updates
+comprised four native `0x89` quality retries, three native
+status-zero/completion-zero acceptances, and a final native `0x59`. The seven
+nonterminal updates were each followed by successful native `0x8a`; each next
+fresh capture completed. The USB trace contained eight request/response pairs
+for each of `0x66`, `0x6c`, and `0x8a`, with three 96-byte accepted-progress
+`0x6c` replies, five 44-byte non-success replies, 318 packets, and zero drops.
+The policy again performed no replay, synthetic completion, state forcing, or
+commit, and normal cleanup closed the device.
+
 ## Evidence classification
 
 ### Proven on hardware
@@ -611,6 +639,22 @@ accidentally loop past the completion boundary.
   `0x66` without an intervening `0x8a`. Four lift-and-touch attempts did not
   complete that capture. No `0x6e` or `0x6f` was reached, and the device
   remained `0a5c:5833`.
+- The first accepted-incomplete re-arm control returned native `0x89` for all
+  five samples. All five ordinary `0x89 -> 0x8a -> 0x66` recoveries succeeded;
+  cancellation and close were clean, with no commit opcode.
+- A second accepted-incomplete re-arm control obtained three native
+  status-zero/completion-zero updates. Each added `0x8a` succeeded and each
+  following fresh `0x66` completed, eliminating the earlier capture hang.
+- The next fresh update at the four-update boundary returned native `0x59`.
+  It was preserved without same-update replay, state forcing, or commit;
+  cleanup and close completed normally and the device remained `0a5c:5833`.
+- An independent 2026-08-19 run reproduced three accepted-incomplete updates
+  followed by native `0x59`, including successful `0x8a` continuation after
+  every accepted update. Its 318-packet USB trace had zero drops and normal
+  cleanup, with no replay or commit.
+- A separate two-finger control with explicit lift cycles returned sixteen
+  consecutive native `0x89` results. Every ordinary recovery succeeded and
+  cancellation/close were clean; the 560-packet USB trace had zero drops.
 
 ### Proven by static analysis
 
@@ -631,6 +675,10 @@ accidentally loop past the completion boundary.
 - The Linux `0x59` boundary and the Windows rejected-fourth-update boundary
   are likely related to final-sample or accumulator consistency, but protected
   Windows content prevents a numeric status mapping.
+- Because native `0x8a` now matches the successful Windows between-capture
+  shape while Linux still returns `0x59` on the fourth update, the remaining
+  divergence is more likely in initialization, captured-update input, or
+  accumulated session state than in the absence of re-arm alone.
 - Historical `0x8d`/`0x24` commit errors may result from entering generic
   commit without selected-path template state.
 

@@ -12,12 +12,14 @@ PRELOAD="$EXPERIMENT/libcv2-enrollment-0x89-rearm.so"
 HARNESS="$EXPERIMENT/cv_tod_enrollment_experiment"
 CONFIRMED=no
 UPDATE_POLICY=legacy-repeat
+BOUNDARY_MODE_COUNT=0
 CHILD_PID=""
 
 usage() {
     cat <<'EOF'
 Usage:
-  tools/run_local_enrollment_0x89_test.sh --confirm-real-enrollment [--fresh-boundary]
+  tools/run_local_enrollment_0x89_test.sh --confirm-real-enrollment \
+    [--fresh-boundary|--fresh-rearm-boundary]
 
 WARNING: this exercises real enrollment. If all stages succeed, the
 ControlVault driver may commit a fingerprint template inside the device.
@@ -27,6 +29,10 @@ configuration is changed.
 --fresh-boundary sends one update per fresh capture, preserves native 0x59,
 and converts a native nonzero completion into a fatal cleanup before the
 unchanged state machine can enter generic commit.
+
+--fresh-rearm-boundary retains those boundaries and sends one native 0x8a
+after each accepted incomplete update. It stops on the fourth incomplete
+acceptance rather than allowing another capture.
 EOF
 }
 
@@ -38,6 +44,12 @@ while (($#)); do
             ;;
         --fresh-boundary)
             UPDATE_POLICY=fresh-stop-before-commit
+            BOUNDARY_MODE_COUNT=$((BOUNDARY_MODE_COUNT + 1))
+            shift
+            ;;
+        --fresh-rearm-boundary)
+            UPDATE_POLICY=fresh-rearm-stop-before-commit
+            BOUNDARY_MODE_COUNT=$((BOUNDARY_MODE_COUNT + 1))
             shift
             ;;
         -h|--help)
@@ -51,6 +63,11 @@ while (($#)); do
             ;;
     esac
 done
+
+if ((BOUNDARY_MODE_COUNT > 1)); then
+    echo "multiple enrollment boundary modes selected; refusing ambiguity" >&2
+    exit 2
+fi
 
 if [[ "$CONFIRMED" != yes ]]; then
     usage >&2
@@ -89,7 +106,9 @@ export CV2_ENROLLMENT_UPDATE_POLICY="$UPDATE_POLICY"
 
 mkdir -p "$REPO/test-results"
 STAMP="$(date --iso-8601=seconds | tr ':' '-')"
-if [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
+if [[ "$UPDATE_POLICY" == fresh-rearm-stop-before-commit ]]; then
+    LOG="$REPO/test-results/enrollment-fresh-rearm-boundary-$STAMP.log"
+elif [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
     LOG="$REPO/test-results/enrollment-fresh-boundary-$STAMP.log"
 else
     LOG="$REPO/test-results/enrollment-0x59-single-update-retry-$STAMP.log"
@@ -110,7 +129,13 @@ trap 'cleanup TERM; exit 143' TERM
     echo "evidence_timestamp=$(date --iso-8601=seconds)"
     echo "$VALIDATION"
     echo "evidence_scope=repository-local logical command logging; not USBPcap"
-    if [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
+    if [[ "$UPDATE_POLICY" == fresh-rearm-stop-before-commit ]]; then
+        echo "experiment=fresh capture per update with accepted-incomplete re-arm"
+        echo "same_update_retry=disabled"
+        echo "accepted_incomplete_rearm=one native 0x8A before next capture"
+        echo "accepted_update_limit=4"
+        echo "native_completion_policy=return fatal status to existing cleanup"
+    elif [[ "$UPDATE_POLICY" == fresh-stop-before-commit ]]; then
         echo "experiment=fresh capture per update; stop before native completion commit"
         echo "same_update_retry=disabled"
         echo "native_completion_policy=return fatal status to existing cleanup"

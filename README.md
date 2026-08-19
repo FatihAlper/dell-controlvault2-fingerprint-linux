@@ -195,6 +195,36 @@ at `0a5c:5833`. The next candidate is a separately tested re-arm after native
 success with completion zero. Patch 4 is not enabled for the tested `5833`
 profile.
 
+The separately selected follow-up mode adds one native `0x8a` after accepted
+status-zero/completion-zero progress and stops before a fourth incomplete
+acceptance can schedule another capture:
+
+```sh
+tools/run_local_enrollment_0x89_test.sh \
+  --confirm-real-enrollment --fresh-rearm-boundary
+```
+
+It is covered by mock tests. Its first hardware control produced five native
+`0x89` quality rejections, each with successful normal re-arm, so the new
+accepted-incomplete branch was not exercised. Cancellation and close completed
+cleanly; no commit command was reached and the device stayed at `0a5c:5833`.
+
+A second hardware control exercised that branch three times. Each accepted
+status-zero/completion-zero update was followed by native `0x8a`, and every
+following fresh `0x66` capture completed instead of hanging. The next update,
+at the four-update boundary, still returned native `0x59`. The policy preserved
+that result without replay, synthesis, state forcing, or commit; stock cleanup
+closed the device cleanly. This separates the missing between-capture re-arm
+from the still-unresolved fourth-update boundary.
+
+An independent 2026-08-19 replication produced the same decisive sequence:
+three accepted status-zero/completion-zero updates, each followed by successful
+native `0x8a` and a completed fresh capture, then native `0x59` on the next
+update. Its USB trace contained eight `0x66`, eight `0x6c`, and eight `0x8a`
+request/response pairs with zero packet loss. Four intervening `0x89` quality
+retries were preserved. The run again stopped before replay or commit and
+closed the device cleanly.
+
 ## Research scope
 
 This repository contains independently derived interoperability research for

@@ -349,6 +349,92 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions), result.stdout)
         self.assertEqual(result.stdout.count("command 0x6C"), 1)
 
+    def test_fresh_rearm_policy_rearms_accepted_incomplete_update(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        markers = [
+            "command 0x6C status=0x0",
+            "accepted incomplete update; accepted=1/4",
+            "re-arming accepted incomplete enrollment with command 0x8A",
+            "command 0x8A status=0x0",
+            "0x8A completed successfully",
+            "callback status=0x0 state=1",
+            "counters update=1 enrollment_started=1 capture=0 "
+            "cancel=0 discard=0",
+            "final_status=0x0",
+        ]
+        positions = [result.stdout.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions), result.stdout)
+
+    def test_fresh_rearm_policy_blocks_completion_before_rearm(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("blocking state 2 and generic commit", result.stdout)
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertNotIn("command 0x8A", result.stdout)
+
+    def test_fresh_rearm_policy_fails_closed_on_rearm_error(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_REARM_STATUS="0x42",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("0x8A failed with status 0x42", result.stdout)
+        self.assertIn("final_status=0x42", result.stdout)
+        self.assertIn(
+            "counters update=1 enrollment_started=1 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+
+    def test_fresh_rearm_policy_stops_at_four_incomplete_updates(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SECOND_UPDATE_STATUS="0",
+            MOCK_SECOND_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="4",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("accepted incomplete update; accepted=4/4", result.stdout)
+        self.assertIn(
+            "accepted-update limit reached without native completion; "
+            "blocking another capture",
+            result.stdout,
+        )
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=4 enrollment_started=3 capture=3 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertEqual(result.stdout.count("command 0x8A status=0x0"), 3)
+        self.assertEqual(result.stdout.count("command 0x66 status=0x0"), 3)
+
     def test_0x8a_failure_uses_existing_fatal_paths_once(self) -> None:
         result = self.run_loader(
             MOCK_FIRST_UPDATE_STATUS="0x89",
@@ -573,6 +659,10 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         self.assertIn(
             "experiment=bounded single repeated UpdateEnrollment after "
             "native 0x59",
+            runner,
+        )
+        self.assertIn(
+            "multiple enrollment boundary modes selected; refusing ambiguity",
             runner,
         )
 

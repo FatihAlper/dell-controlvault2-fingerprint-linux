@@ -197,8 +197,16 @@ mock_run_enrollment (void)
   uint8_t completion = 0x31;
   unsigned char enrollment_output[20];
   uint32_t output_value = 0x51525354;
+  uint32_t sequential_updates = status_from_env (
+    "MOCK_SEQUENTIAL_UPDATE_COUNT", 1);
   int defer_capture_completion =
     getenv ("MOCK_DEFER_CAPTURE_COMPLETION") != NULL;
+
+  if (sequential_updates == 0 || sequential_updates > 16)
+    {
+      fprintf (stderr, "invalid MOCK_SEQUENTIAL_UPDATE_COUNT\n");
+      abort ();
+    }
 
   for (size_t index = 0; index < sizeof enrollment_output; index++)
     enrollment_output[index] = (unsigned char) (0x40 + index);
@@ -214,6 +222,25 @@ mock_run_enrollment (void)
   if (status != 0 && status != 0xa4 && status != 0x89)
     cv_fingerprint_capture_cancel ();
   fprintf (stderr, "[mock-tod] callback status=0x%x state=1\n", status);
+
+  for (uint32_t index = 1;
+       index < sequential_updates && status == 0;
+       index++)
+    {
+      (void) cv_fingerprint_capture_start (
+        1, 2, 0x23, enrollment_id, NULL, NULL);
+      status = cv_fingerprint_update_enrollment (
+        1,
+        enrollment_id,
+        sizeof auxiliary_input,
+        auxiliary_input,
+        &completion,
+        enrollment_output,
+        &output_value);
+      if (status != 0 && status != 0xa4 && status != 0x89)
+        cv_fingerprint_capture_cancel ();
+      fprintf (stderr, "[mock-tod] callback status=0x%x state=1\n", status);
+    }
 
   if (status == 0x89)
     {

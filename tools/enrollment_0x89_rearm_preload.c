@@ -4,9 +4,10 @@
  * The only interposed driver function is cv_fingerprint_update_enrollment().
  * The default legacy-repeat policy makes exactly one additional call after
  * 0x59, preserving the original diagnostic behavior.  The explicitly
- * selected fresh-stop-before-commit policy never repeats 0x59 and blocks a
+ * selected fresh-stop-before-commit policies never repeat 0x59 and block a
  * native nonzero completion before the outer state machine can enter generic
- * commit.
+ * commit.  The fresh-rearm variant additionally sends one target-local 0x8a
+ * after each accepted incomplete update, with a four-update hard stop.
  *
  * A 0x89 result causes the existing target-local
  * cv_cmd_enrollment_started()/0x8a function to run before the original 0x89
@@ -43,11 +44,14 @@
 #define CV2_UPDATE_POLICY_ENV "CV2_ENROLLMENT_UPDATE_POLICY"
 #define CV2_POLICY_LEGACY "legacy-repeat"
 #define CV2_POLICY_FRESH "fresh-stop-before-commit"
+#define CV2_POLICY_FRESH_REARM "fresh-rearm-stop-before-commit"
+#define CV2_MAX_ACCEPTED_UPDATES 4u
 
 typedef enum
 {
   UPDATE_POLICY_LEGACY_REPEAT,
   UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT,
+  UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT,
 } UpdatePolicy;
 
 typedef uint32_t (*cv_cmd_enrollment_started_fn) (void);
@@ -94,6 +98,22 @@ uint32_t cv_fingerprint_update_enrollment (uint32_t handle,
 static pthread_once_t resolver_once = PTHREAD_ONCE_INIT;
 static ResolverCache resolver;
 static atomic_uint retry_attempt = ATOMIC_VAR_INIT (0);
+static atomic_uint accepted_incomplete_count = ATOMIC_VAR_INIT (0);
+
+static const char *
+update_policy_name (UpdatePolicy policy)
+{
+  switch (policy)
+    {
+    case UPDATE_POLICY_LEGACY_REPEAT:
+      return CV2_POLICY_LEGACY;
+    case UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT:
+      return CV2_POLICY_FRESH;
+    case UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT:
+      return CV2_POLICY_FRESH_REARM;
+    }
+  return "<invalid>";
+}
 
 static void
 resolver_failure (const char *format, ...)
@@ -219,6 +239,8 @@ initialize_resolver (void)
     resolver.update_policy = UPDATE_POLICY_LEGACY_REPEAT;
   else if (strcmp (configured_policy, CV2_POLICY_FRESH) == 0)
     resolver.update_policy = UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT;
+  else if (strcmp (configured_policy, CV2_POLICY_FRESH_REARM) == 0)
+    resolver.update_policy = UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT;
   else
     {
       resolver_failure ("invalid %s: %s",
@@ -228,9 +250,7 @@ initialize_resolver (void)
     }
   fprintf (stderr,
            "[cv2-enrollment-policy] selected=%s\n",
-           resolver.update_policy == UPDATE_POLICY_LEGACY_REPEAT
-             ? CV2_POLICY_LEGACY
-             : CV2_POLICY_FRESH);
+           update_policy_name (resolver.update_policy));
   fprintf (stderr,
            "[cv2-0x89-resolver] expected target path: %s\n",
            search.expected.path);
@@ -386,7 +406,7 @@ cv_fingerprint_update_enrollment (uint32_t handle,
                             completion_out,
                             enrollment_data_out,
                             output_value_out);
-  if (resolver.update_policy == UPDATE_POLICY_FRESH_STOP_BEFORE_COMMIT)
+  if (resolver.update_policy != UPDATE_POLICY_LEGACY_REPEAT)
     {
       fprintf (stderr,
                "[cv2-fresh-boundary] native UpdateEnrollment status=0x%x\n",
@@ -406,6 +426,54 @@ cv_fingerprint_update_enrollment (uint32_t handle,
                    "[cv2-fresh-boundary] native completion boundary "
                    "observed; blocking state 2 and generic commit\n");
           return CV_STATUS_EXPERIMENT_FAILURE;
+        }
+      if (resolver.update_policy ==
+            UPDATE_POLICY_FRESH_REARM_STOP_BEFORE_COMMIT &&
+          status == CV_STATUS_SUCCESS && completion_out != NULL &&
+          *completion_out == 0)
+        {
+          unsigned int accepted = atomic_fetch_add_explicit (
+                                    &accepted_incomplete_count,
+                                    1,
+                                    memory_order_relaxed)
+                                  + 1;
+
+          fprintf (stderr,
+                   "[cv2-fresh-rearm] accepted incomplete update; "
+                   "accepted=%u/%u\n",
+                   accepted,
+                   CV2_MAX_ACCEPTED_UPDATES);
+          if (accepted >= CV2_MAX_ACCEPTED_UPDATES)
+            {
+              fprintf (stderr,
+                       "[cv2-fresh-rearm] accepted-update limit reached "
+                       "without native completion; blocking another "
+                       "capture\n");
+              return CV_STATUS_EXPERIMENT_FAILURE;
+            }
+
+          attempt = atomic_fetch_add_explicit (&retry_attempt,
+                                               1,
+                                               memory_order_relaxed)
+                    + 1;
+          fprintf (stderr,
+                   "[cv2-fresh-rearm] re-arming accepted incomplete "
+                   "enrollment with command 0x8A; attempt=%u\n",
+                   attempt);
+          rearm_status = resolver.enrollment_started ();
+          if (rearm_status != CV_STATUS_SUCCESS)
+            {
+              fprintf (stderr,
+                       "[cv2-fresh-rearm] 0x8A failed with status 0x%x; "
+                       "attempt=%u\n",
+                       rearm_status,
+                       attempt);
+              return fatalize_rearm_status (rearm_status);
+            }
+          fprintf (stderr,
+                   "[cv2-fresh-rearm] 0x8A completed successfully; "
+                   "attempt=%u\n",
+                   attempt);
         }
     }
   else if (status == CV_STATUS_UPDATE_AGAIN_EXPERIMENT)
