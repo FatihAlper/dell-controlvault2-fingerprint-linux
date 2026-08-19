@@ -165,6 +165,10 @@ tools/compare_cv_usb_updates.py
                              payload-redacting UpdateEnrollment comparison
 tools/audit_windows_a21_update.py
                              read-only A21 cross-adapter dataflow validator
+tools/windows_a21_enrollment_trace.js
+                             payload-free A21 enrollment metadata tracer
+tools/run_windows_a21_enrollment_trace.ps1
+                             hash-pinned Windows tracer runner
 tools/audit_linux_bcm5880_abis.py
                              read-only pinned Linux export ABI validator
 tools/run_capture_get_result_probe.sh
@@ -183,6 +187,9 @@ docs/controlvault2-command-status-reference.md
 The capture-result experiment and its strict no-update/no-template/no-commit
 boundary are documented in
 [the CaptureGetResult evidence note](docs/evidence/capture-get-result-probe.md).
+The next Windows reference experiment and its no-payload/no-memory-write
+boundary are documented in
+[the A21 enrollment metadata trace](docs/evidence/windows-a21-enrollment-metadata-trace.md).
 
 ## Known limitation
 

@@ -118,6 +118,12 @@ BIP_PROFILE = ArtifactProfile(
             "b86c00000066894424384533e44489642430"
             "8b44245c894424284c89642420"
         ),
+        # The generic UpdateEnrollment dispatcher calls is5880, tests AL,
+        # selects the BCM5880 host-template helper when true, and otherwise
+        # falls through to the generic command-0x6c path.
+        "bcm5880_update_selector": bytes.fromhex(
+            "e829dc01008bcb84c074194c8bce4d8bc7498bd6e895fcff"
+        ),
         # The exported CSS_FingerprintCaptureStart preserves its incoming
         # output pointer in r14 and forwards it to the internal dispatcher.
         "capture_start_output_forwarding": bytes.fromhex(
@@ -150,6 +156,7 @@ BIP_PROFILE = ArtifactProfile(
         "generic_input_20_bytes": 0x2C730,
         "generic_zero_auxiliary": 0x2C79D,
         "generic_command_0x6c": 0x2C8A5,
+        "bcm5880_update_selector": 0x2C642,
         "capture_start_output_forwarding": 0x147D0,
         "capture_start_5880_dispatch": 0x2A880,
         "capture_start_generic_output_20_bytes": 0x2A9BF,
@@ -236,6 +243,8 @@ def main() -> int:
     print("derived.capture_get_result.initial_capacity=0x17000")
     print("derived.update_auxiliary=false_size_0_pointer_null")
     print("derived.generic_command=0x6c")
+    print("derived.update_selector.test_rva=0x2d249")
+    print("derived.update_selector.false_path=generic_0x6c")
     print("artifact_write_performed=no")
     return 0
 
