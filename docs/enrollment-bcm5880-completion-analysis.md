@@ -519,6 +519,21 @@ failure. The immediate missing fact is why the fourth generic `0x6c` succeeds
 in one session and fails in others, and why Linux repeatedly reaches raw
 `0x59` at the analogous boundary.
 
+## Mock-only coordinator scaffold
+
+A callback-injected coordinator core now models the selected path's proven
+host state without resolving driver symbols or sending hardware commands. It
+validates the 20-byte enrollment ID, bounds three stored feature records to
+`0x258` bytes each, passes a fourth live record to a mock template callback,
+and retains a bounded `0x708`-byte template. Even on success it enters a
+terminal `TEMPLATE_READY_COMMIT_BLOCKED` state; no commit operation exists in
+the interface.
+
+Both compile time and runtime require explicit mock-only gates. This provides
+testable state ownership, ordering, overflow, status, token, and cleanup
+semantics, but does not promote the selected path to a hardware candidate.
+See [the mock scaffold record](evidence/bcm5880-coordinator-mock.md).
+
 ## Ranked next work
 
 ### 1. Compare generic `0x6c` state above the protection boundary
