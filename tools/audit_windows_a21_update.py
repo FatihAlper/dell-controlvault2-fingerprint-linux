@@ -71,12 +71,26 @@ SENSOR_PROFILE = ArtifactProfile(
             "837f2002488b6c244075100f10475c410f114518"
             "8b476c41894528"
         ),
+        # The WBF sensor adapter initializes the CaptureGetResult capacity to
+        # 0x17000 bytes before allocating the result buffer.
+        "capture_get_result_capacity": bytes.fromhex(
+            "c744246000700100ff159b790100ba08"
+        ),
+        # In basic mode, CSS_FingerprintCaptureGetResult is called with
+        # selector 1, SensorContext+0x5c (the 20-byte CaptureStart output),
+        # &capacity, and the freshly allocated result buffer.
+        "capture_get_result_arguments": bytes.fromhex(
+            "488d575c4d8bce4c8d442460b101"
+            "ff15c1a702008be88bd5488d0d7e"
+        ),
     },
     expected_offsets={
         "pipeline_context_loads": 0x15BB,
         "capture_start_output": 0x1663,
         "css_capture_start_call": 0x224F,
         "advanced_capture_id_copy": 0x16B6,
+        "capture_get_result_capacity": 0x1AEF,
+        "capture_get_result_arguments": 0x1B43,
     },
 )
 
@@ -217,6 +231,9 @@ def main() -> int:
     print("derived.update_input_content=refreshed_by_advanced_start_capture")
     print("derived.update_input_source=css_capture_start_output")
     print("derived.bcm5880_capture_start_selected_path=generates_shared_20_byte_id")
+    print("derived.capture_get_result.selector=1")
+    print("derived.capture_get_result.capture_id=sensor_context_plus_0x5c")
+    print("derived.capture_get_result.initial_capacity=0x17000")
     print("derived.update_auxiliary=false_size_0_pointer_null")
     print("derived.generic_command=0x6c")
     print("artifact_write_performed=no")

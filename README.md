@@ -30,6 +30,7 @@ On the tested Latitude 7390:
 | Capture retry | `0x89 → 0x8a → new capture` works on hardware |
 | Bounded `0x59` diagnostic | A single repeated update returns `0x89`; Windows controls do not use this retry |
 | Fresh-boundary diagnostic | One accepted update was followed by fresh `0x66`, but no between-capture `0x8a`; later touches did not complete |
+| CaptureGetResult diagnostic | Selector `1` was called once after capture; native `0x89`, `0x17000` length unchanged; payload redacted and wiped |
 | Enrollment completion | Incomplete; completion remains zero |
 | Commit and verify | Not proven |
 
@@ -166,6 +167,8 @@ tools/audit_windows_a21_update.py
                              read-only A21 cross-adapter dataflow validator
 tools/audit_linux_bcm5880_abis.py
                              read-only pinned Linux export ABI validator
+tools/run_capture_get_result_probe.sh
+                             one-call, payload-redacting capture-result probe
 tools/bcm5880_enrollment_coordinator.[ch]
                              compile-gated mock-only 3+1 coordinator core
 tools/bcm5880_linux_abi_adapter.[ch]
@@ -176,6 +179,10 @@ PATCHES.md                   patch rationale and observed evidence
 docs/controlvault2-command-status-reference.md
                              inferred command/status dictionary
 ```
+
+The capture-result experiment and its strict no-update/no-template/no-commit
+boundary are documented in
+[the CaptureGetResult evidence note](docs/evidence/capture-get-result-probe.md).
 
 ## Known limitation
 

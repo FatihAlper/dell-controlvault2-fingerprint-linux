@@ -108,17 +108,20 @@ integration question:
 
 - no direct internal call/xref from the current TOD enrollment control flow to
   either export was found in the artifact;
-- no real `capture_get_result` call has been made on the device;
-- selector semantics and which returned `0x69` record corresponds to the
-  Windows selected-path feature remain unknown;
+- one separately bounded real `capture_get_result` call used selector `1`
+  after a normal capture and returned native `0x89` with its `0x17000` in/out
+  length unchanged;
+- selector `1` is statically confirmed for the Windows basic-mode WBF path,
+  but which successful `0x69` record, if any, corresponds to the Windows
+  selected-path feature remains unknown;
 - Linux and Windows feature/template byte-format equivalence remains unknown;
 - the selected BCM5880 coordinator may not be the path responsible for the
   successful generic-looking Windows `0x6c`/`0x6e` trace; and
 - commit ownership, persistence, cleanup, and rollback remain unresolved.
 
-Consequently, this change does not authorize a real callback adapter or any
-hardware invocation. Those need a separately reviewed, capture-only evidence
-step before commit is considered.
+Consequently, this change does not authorize a real callback adapter. The
+separately reviewed capture-only evidence step produced no successful feature
+record, and commit remains outside the permitted boundary.
 
 ## Reproduction
 
