@@ -1,5 +1,9 @@
 # Dell ControlVault 2 fingerprint on Linux
 
+> **Archived:** Active ControlVault2 research and future driver work moved to
+> [`FatihAlper/dell-controlvault2-research`](https://github.com/FatihAlper/dell-controlvault2-research).
+> This fork is preserved read-only for historical links and provenance.
+
 Bring-up tooling and byte patches for the proprietary Broadcom TOD driver used
 with Dell ControlVault 2 / BCM5880 fingerprint devices:
 
