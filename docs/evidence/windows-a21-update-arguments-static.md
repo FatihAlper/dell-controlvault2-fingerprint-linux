@@ -2,7 +2,7 @@
 
 ## Scope and artifact identity
 
-This is a read-only static analysis of two x64 DLLs extracted from Dell
+This is a read-only static analysis of three x64 DLLs extracted from Dell
 ControlVault2 package `N23KC`, version `4.12.5.8 A21`. The package obtained
 for the tested Latitude and the independently downloaded copy were identical:
 
@@ -12,6 +12,9 @@ e157fbe548bfd2b6b1ee4410b5dc93255409b329bbe4d75da9d7c1684fa1db4e
 
 622b1a12566cb313cde264869ca5a4b410e3d5b2b604f5dd628c4a6b709b19ae
   BrcmEngineAdapter.dll
+
+dfb30d81de42e726477b103412fba2c88abd9b675ead7141f25063a3ac8d4e6c
+  BrcmSensorAdapter.dll
 
 30c556a9b542d0fcf29a6822b3bb81fe23ce2917b403b3f25af9384e0e31e524
   bipdll.dll
@@ -55,13 +58,13 @@ and later fills fields beginning at `0x30`; it does not initialize the 20-byte
 range `0x18`--`0x2b` separately. `CreateEnrollment` only changes fields in the
 inner state.
 
-A scan of every WBF callback address in the returned interface, from Attach
-through ControlUnitPrivileged, found only one direct adapter-side
-address-taking reference to the outer `EngineContext+0x18` field: the call
-above. It found no direct adapter-side write to that 20-byte range. This proves
-the allocation's initial state, but not the field's value at UpdateEnrollment
-time: a whole-context pointer can cross an indirect callback, and code below a
-dynamically resolved call can mutate caller memory.
+An EngineAdapter-only scan found no direct writer to that 20-byte range. The
+cross-adapter analysis subsequently found the writer in SensorAdapter:
+Advanced StartCapture copies the 20-byte output of
+`CSS_FingerprintCaptureStart` from `SensorContext+0x5c` to
+`EngineContext+0x18`. Thus the address is fixed but its content is refreshed
+with a capture/enrollment ID before UpdateEnrollment. See
+[the complete dataflow record](windows-a21-update-input-dataflow.md).
 
 The adapter also hard-codes argument 4 to false. Therefore the optional
 auxiliary-data construction inside the CSS wrapper is not selected by this
@@ -131,7 +134,7 @@ exposes a concrete argument-lifetime mismatch:
 | Property | Linux observed runtime | Windows A21 generic static path |
 |---|---|---|
 | 20-byte input storage | fresh per update | fixed `EngineContext+0x18` |
-| Call-time content | capture-derived, nonzero/variable | not established; allocation begins zero |
+| Call-time content | capture-derived | capture-start output copied by SensorAdapter |
 | Auxiliary input | size 0 | false -> size 0, pointer null |
 | 20-byte output storage | fresh per update | fixed `inner+0x2c` |
 
@@ -141,19 +144,20 @@ accepted three updates before reaching the known `0x59` boundary. Neither
 session completed or committed. Thus stable zero is not the Windows-equivalent
 fix; see [the hardware record](zero-update-input-hardware.md).
 
-The experiment also corrects the static interpretation: zero allocation plus
-the absence of a direct field writer is insufficient to establish call-time
-content. The next task is exact write/dataflow provenance for
-`EngineContext+0x18`, including indirect callbacks and possible in/out use by
-the CSS layer, rather than another guessed Linux replacement value.
+The recovered SensorAdapter dataflow explains that result. Stable zero
+discarded the required capture/enrollment ID; it did not reproduce Windows.
+Windows and Linux differ in storage lifetime, not in the semantic source of
+the 20-byte input. The next implementation target is the already recovered
+BCM5880 host enrollment coordinator rather than another input substitution.
 
 ## Reproduction
 
-After extracting the two files outside the repository:
+After extracting the three files outside the repository:
 
 ```sh
 python3 tools/audit_windows_a21_update.py \
   /private/path/BrcmEngineAdapter.dll \
+  /private/path/BrcmSensorAdapter.dll \
   /private/path/bipdll.dll
 ```
 

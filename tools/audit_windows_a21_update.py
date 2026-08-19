@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate static UpdateEnrollment anchors in Dell's Windows A21 binaries.
+"""Validate static UpdateEnrollment dataflow anchors in Dell's Windows A21 binaries.
 
 The tool is deliberately read-only.  It does not extract, execute, patch, or
-copy either proprietary binary; callers must provide their own extracted
+copy any proprietary binary; callers must provide their own extracted
 files from the supported Dell package.
 """
 
@@ -48,6 +48,39 @@ ENGINE_PROFILE = ArtifactProfile(
 )
 
 
+SENSOR_PROFILE = ArtifactProfile(
+    name="BrcmSensorAdapter.dll",
+    sha256="dfb30d81de42e726477b103412fba2c88abd9b675ead7141f25063a3ac8d4e6c",
+    signatures={
+        # BrcmSensorAdapterStartCapture loads Pipeline->SensorContext and
+        # Pipeline->EngineContext from offsets 0x30 and 0x38 respectively.
+        "pipeline_context_loads": bytes.fromhex("488b79304c8b6938"),
+        # WBFUSH_StartCapture receives SensorContext+0x5c as its output and
+        # capture mode 0x22/0x23 in edx.
+        "capture_start_output": bytes.fromhex(
+            "4c8d475c418bd7c74750010000008bebe8780b0000"
+        ),
+        # WBFUSH_StartCapture preserves that pointer in r8 when it invokes
+        # the dynamically resolved CSS_FingerprintCaptureStart export.
+        "css_capture_start_call": bytes.fromhex(
+            "4c8bc78d48018bd6ff150b9f0200"
+        ),
+        # In Advanced mode (2), copy the 20-byte capture ID from
+        # SensorContext+0x5c to EngineContext+0x18.
+        "advanced_capture_id_copy": bytes.fromhex(
+            "837f2002488b6c244075100f10475c410f114518"
+            "8b476c41894528"
+        ),
+    },
+    expected_offsets={
+        "pipeline_context_loads": 0x15BB,
+        "capture_start_output": 0x1663,
+        "css_capture_start_call": 0x224F,
+        "advanced_capture_id_copy": 0x16B6,
+    },
+)
+
+
 BIP_PROFILE = ArtifactProfile(
     name="bipdll.dll",
     sha256="30c556a9b542d0fcf29a6822b3bb81fe23ce2917b403b3f25af9384e0e31e524",
@@ -71,12 +104,43 @@ BIP_PROFILE = ArtifactProfile(
             "b86c00000066894424384533e44489642430"
             "8b44245c894424284c89642420"
         ),
+        # The exported CSS_FingerprintCaptureStart preserves its incoming
+        # output pointer in r14 and forwards it to the internal dispatcher.
+        "capture_start_output_forwarding": bytes.fromhex(
+            "488b47504d8bce8b4f20448bc54889442428"
+            "8bd6488b47484889442420e86e5f0100"
+        ),
+        # When the 5880 selector is true, the internal CaptureStart
+        # dispatcher passes that output pointer to its selected helper.
+        "capture_start_5880_dispatch": bytes.fromhex(
+            "498bd68bcbe856fdffff"
+        ),
+        # The generic branch registers the same pointer as a 0x14-byte
+        # structured-response output.
+        "capture_start_generic_output_20_bytes": bytes.fromhex(
+            "4c8d4c24684d8bc6ba1400000033c9e82dd20100"
+        ),
+        # In that selected helper, capture mode bit 0x20 makes CaptureStart
+        # generate the shared 20-byte capture/enrollment ID at 0xaf030.
+        "capture_start_5880_id_generation": bytes.fromhex(
+            "488d0d073e0800e82a6d020085c07416"
+        ),
+        # Copy 16+4 bytes of that ID into the caller-provided output buffer.
+        "capture_start_5880_id_copy": bytes.fromhex(
+            "0f1005e13d0800488d4c24300f1107"
+            "8b05e33d0800894710"
+        ),
     },
     expected_offsets={
         "wrapper_dispatch_arguments": 0x15479,
         "generic_input_20_bytes": 0x2C730,
         "generic_zero_auxiliary": 0x2C79D,
         "generic_command_0x6c": 0x2C8A5,
+        "capture_start_output_forwarding": 0x147D0,
+        "capture_start_5880_dispatch": 0x2A880,
+        "capture_start_generic_output_20_bytes": 0x2A9BF,
+        "capture_start_5880_id_generation": 0x2A622,
+        "capture_start_5880_id_copy": 0x2A648,
     },
 )
 
@@ -128,24 +192,31 @@ def report(profile: ArtifactProfile, offsets: dict[str, int]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Read-only validation of Windows A21 UpdateEnrollment instruction "
+            "Read-only validation of Windows A21 UpdateEnrollment dataflow "
             "anchors. The supported files come from Dell package N23KC A21."
         )
     )
     parser.add_argument("engine_adapter", type=Path)
+    parser.add_argument("sensor_adapter", type=Path)
     parser.add_argument("bipdll", type=Path)
     args = parser.parse_args()
 
     try:
         engine_offsets = validate_artifact(args.engine_adapter, ENGINE_PROFILE)
+        sensor_offsets = validate_artifact(args.sensor_adapter, SENSOR_PROFILE)
         bip_offsets = validate_artifact(args.bipdll, BIP_PROFILE)
     except (OSError, AuditError) as error:
         parser.error(str(error))
 
     report(ENGINE_PROFILE, engine_offsets)
+    report(SENSOR_PROFILE, sensor_offsets)
     report(BIP_PROFILE, bip_offsets)
     print("derived.engine_context_allocation=zeroed")
     print("derived.update_input=engine_context_plus_0x18_length_20")
+    print("derived.update_input_pointer=stable_engine_context_field")
+    print("derived.update_input_content=refreshed_by_advanced_start_capture")
+    print("derived.update_input_source=css_capture_start_output")
+    print("derived.bcm5880_capture_start_selected_path=generates_shared_20_byte_id")
     print("derived.update_auxiliary=false_size_0_pointer_null")
     print("derived.generic_command=0x6c")
     print("artifact_write_performed=no")

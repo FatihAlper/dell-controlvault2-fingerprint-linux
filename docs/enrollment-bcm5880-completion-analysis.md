@@ -558,22 +558,20 @@ firmware may maintain an internal accumulator.
 The corresponding Windows static comparison is now complete. A21
 EngineAdapter passes a fixed `EngineContext+0x18` 20-byte input, hard-codes the
 optional auxiliary-data flag false, and supplies a persistent 20-byte output
-at `inner+0x2c`. The 0x290-byte EngineContext is allocated with
-`HEAP_ZERO_MEMORY`; no adapter callback directly writes or takes the address of
-that 20-byte input range before UpdateEnrollment. This direct scan does not
-cover indirect whole-context writes or CSS in/out behavior. The CSS wrapper
-consequently forwards auxiliary size zero and pointer null to the generic `0x6c`
-dispatcher. See
-[the static Windows argument record](evidence/windows-a21-update-arguments-static.md).
+at `inner+0x2c`. Advanced StartCapture refreshes that fixed input field from
+the 20-byte `CSS_FingerprintCaptureStart` output through SensorAdapter. The CSS
+wrapper forwards auxiliary size zero and pointer null to the generic `0x6c`
+dispatcher. See [the static Windows argument record](evidence/windows-a21-update-arguments-static.md)
+and [the cross-adapter dataflow](evidence/windows-a21-update-input-dataflow.md).
 
-This rules out hidden auxiliary data as the generic Windows/Linux difference
-and identifies a storage-lifetime difference, but the bounded input experiment
-now rejects the simplest interpretation. Stable zero accepted no updates
+This rules out hidden auxiliary data and input semantics as the generic
+Windows/Linux difference. The bounded input experiment confirms the recovered
+dataflow: stable zero accepted no updates
 (`0x89` seven times, then `0x88`); an adjacent original-input control accepted
 three before the established `0x59` boundary. Neither completed or committed.
-See [the hardware record](evidence/zero-update-input-hardware.md). The next
-comparison must recover call-time write/dataflow provenance for the Windows
-field, including indirect callbacks and possible CSS in/out mutation.
+See [the hardware record](evidence/zero-update-input-hardware.md). Pointer
+lifetime is not the missing behavior; the next engineering target is the
+BCM5880 host enrollment coordinator described below.
 
 ### 2. Re-arm after each accepted incomplete Linux update — completed
 

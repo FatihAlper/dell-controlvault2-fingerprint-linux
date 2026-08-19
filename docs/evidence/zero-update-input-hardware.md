@@ -85,19 +85,18 @@ samples under the same requested-finger procedure, while stable zero accepted
 none. Therefore continuously replacing the Linux input with zero is not the
 Windows-equivalent fix and should not be carried into a driver.
 
-This result narrows, rather than invalidates, the Windows static evidence.
-`EngineContext+0x18` is zero when its allocation returns, but the direct
-reference scan did not prove its value at UpdateEnrollment time. Plausible
-remaining explanations include:
+Subsequent cross-adapter analysis resolves the reason. In Advanced mode,
+Windows SensorAdapter copies the 20-byte output of
+`CSS_FingerprintCaptureStart` from `SensorContext+0x5c` into
+`EngineContext+0x18`; EngineAdapter then passes that same field to
+UpdateEnrollment. The pointer is stable, but its content is refreshed with a
+capture/enrollment ID. Stable zero therefore removed a required identifier.
+See [the complete Windows dataflow](windows-a21-update-input-dataflow.md).
 
-- an indirect WBF callback or dynamically dispatched helper populates the
-  field before UpdateEnrollment;
-- the CSS call treats the fixed field as in/out state and changes it across
-  calls; or
-- the recovered field boundary or call-time ownership needs refinement.
-
-The next useful Windows analysis is write/dataflow provenance for that exact
-20-byte field, not another Linux value guess.
+The result is now conclusive for this hypothesis: another input-lifetime or
+replacement-value experiment is not justified. The next implementation target
+is the BCM5880 host enrollment coordinator and its selected completion/commit
+path.
 
 ## Private source-log identity
 

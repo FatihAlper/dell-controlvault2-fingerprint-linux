@@ -162,6 +162,8 @@ tools/prepare_local_tod_test.sh
 tools/run_local_tod_test.sh
 tools/compare_cv_usb_updates.py
                              payload-redacting UpdateEnrollment comparison
+tools/audit_windows_a21_update.py
+                             read-only A21 cross-adapter dataflow validator
 udev/                        rules for validated CV2 PIDs
 packaging/arch/              Arch-only repository staging
 PATCHES.md                   patch rationale and observed evidence

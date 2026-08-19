@@ -27,7 +27,11 @@ def synthetic_artifact(profile: audit.ArtifactProfile) -> bytes:
 
 class WindowsA21UpdateAuditTests(unittest.TestCase):
     def test_synthetic_profiles_validate_at_expected_offsets(self):
-        for profile in (audit.ENGINE_PROFILE, audit.BIP_PROFILE):
+        for profile in (
+            audit.ENGINE_PROFILE,
+            audit.SENSOR_PROFILE,
+            audit.BIP_PROFILE,
+        ):
             with self.subTest(profile=profile.name), tempfile.TemporaryDirectory() as td:
                 path = Path(td) / profile.name
                 data = synthetic_artifact(profile)
@@ -70,15 +74,18 @@ class WindowsA21UpdateAuditTests(unittest.TestCase):
     def test_cli_rejects_nonmatching_files_without_writing_them(self):
         with tempfile.TemporaryDirectory() as td:
             engine = Path(td) / "engine.dll"
+            sensor = Path(td) / "sensor.dll"
             bip = Path(td) / "bip.dll"
             engine.write_bytes(b"not the Dell artifact")
+            sensor.write_bytes(b"nor is this one")
             bip.write_bytes(b"also not the Dell artifact")
-            before = (engine.read_bytes(), bip.read_bytes())
+            before = (engine.read_bytes(), sensor.read_bytes(), bip.read_bytes())
             result = subprocess.run(
                 [
                     sys.executable,
                     str(TOOLS / "audit_windows_a21_update.py"),
                     str(engine),
+                    str(sensor),
                     str(bip),
                 ],
                 check=False,
@@ -86,7 +93,10 @@ class WindowsA21UpdateAuditTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(before, (engine.read_bytes(), bip.read_bytes()))
+            self.assertEqual(
+                before,
+                (engine.read_bytes(), sensor.read_bytes(), bip.read_bytes()),
+            )
 
 
 if __name__ == "__main__":
