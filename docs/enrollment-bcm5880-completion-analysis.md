@@ -553,11 +553,24 @@ This runtime result agrees with the static Linux task layout: incomplete
 progress is reported through synthetic `0x8f`, while only the final native
 completion path retains update output for generic commit. It does not prove
 that intermediate output must be fed back to generic `0x6c`, because the
-firmware may maintain an internal accumulator. The next comparison must target
-the Windows adapter immediately before protection or statically recover its
-generic update argument construction: capture mode, selector values, optional
-input length/provenance, and session-state choice. Content must remain
-unlogged.
+firmware may maintain an internal accumulator.
+
+The corresponding Windows static comparison is now complete. A21
+EngineAdapter passes a fixed `EngineContext+0x18` 20-byte input, hard-codes the
+optional auxiliary-data flag false, and supplies a persistent 20-byte output
+at `inner+0x2c`. The 0x290-byte EngineContext is allocated with
+`HEAP_ZERO_MEMORY`; no adapter callback directly writes or takes the address of
+that 20-byte input range before UpdateEnrollment. The CSS wrapper consequently
+forwards auxiliary size zero and pointer null to the generic `0x6c`
+dispatcher. See
+[the static Windows argument record](evidence/windows-a21-update-arguments-static.md).
+
+This rules out hidden auxiliary data as the generic Windows/Linux difference
+and identifies a bounded mismatch: Linux passes a fresh capture-derived
+20-byte input while Windows passes a stable, initially zero context field.
+Static analysis does not yet prove that this mismatch alone causes `0x59`.
+The next experiment should vary only this input, remain fail-closed, and stop
+before commit unless native completion and all required outputs are present.
 
 ### 2. Re-arm after each accepted incomplete Linux update — completed
 

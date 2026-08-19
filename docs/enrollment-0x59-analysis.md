@@ -235,6 +235,39 @@ which returns it unchanged to EngineAdapter. Thus Linux and Windows use the
 same Broadcom CV API status domain at this boundary. Equality of the exact
 on-wire status representation remains unproven without USB capture.
 
+### Recovered generic Windows call arguments
+
+The A21 EngineAdapter's call at RVA `0x31c1` supplies:
+
+```text
+argument 1  EngineContext + 0x18      fixed 20-byte input
+argument 2  stack                     completion output
+argument 3  inner context + 0x2c      fixed 20-byte output
+argument 4  false                     disable optional auxiliary data
+argument 5  stack                     4-byte output
+```
+
+Attach allocates the 0x290-byte EngineContext with `HEAP_ZERO_MEMORY`.
+Inspection of all callback targets in the returned WBF engine interface found
+no adapter-side write or other address-taking reference to the 20-byte range
+at `EngineContext+0x18`; the UpdateEnrollment call is its only address-taking
+reference. This proves zero initialization on the first call and supports,
+but does not absolutely prove across dynamically called code, stable zero
+content on later calls.
+
+Because argument 4 is false, `CSS_FingerprintUpdateEnrollment` forwards
+auxiliary size zero and pointer null. Its internal generic dispatcher
+registers argument 1 as a 20-byte input and builds command `0x6c`. This has the
+same seven-argument shape as Linux but a different observed input lifetime:
+Linux received a fresh capture-derived 20-byte value on every hardware call,
+whereas Windows statically supplies a fixed, initially zero context field.
+
+This rules out optional auxiliary input as the missing Windows state on the
+generic path. It does not yet prove that substituting a zero 20-byte Linux
+input is sufficient or safe to commit. Full instruction anchors, artifact
+hashes, limitations, and a read-only validator are in
+[the Windows A21 argument record](evidence/windows-a21-update-arguments-static.md).
+
 ## Windows BCM5880-specific update path
 
 The generic conclusion above needs an important qualification. In
