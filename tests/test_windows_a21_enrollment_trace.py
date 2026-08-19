@@ -74,6 +74,14 @@ class WindowsA21EnrollmentTraceTests(unittest.TestCase):
         self.assertLess(guard, frida_launch)
         self.assertIn("Find-A21HostProcess", self.runner)
 
+    def test_runner_resolves_psscriptroot_after_parameter_binding(self):
+        param_end = self.runner.index(")\n\n$ErrorActionPreference")
+        self.assertNotIn("Join-Path $PSScriptRoot", self.runner[:param_end])
+        self.assertIn(
+            '$OutputDirectory = Join-Path $PSScriptRoot "..\\test-results"',
+            self.runner[param_end:],
+        )
+
     def test_runner_pins_all_loaded_module_hashes(self):
         expected = (
             "30c556a9b542d0fcf29a6822b3bb81fe23ce2917b403b3f25af9384e0e31e524",

@@ -2,13 +2,20 @@
 param(
     [int]$TargetProcessId = 0,
     [switch]$ConfirmPrivacySafeTrace,
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot "..\test-results")
+    [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 if (-not $ConfirmPrivacySafeTrace) {
     throw "Refusing process instrumentation without -ConfirmPrivacySafeTrace"
+}
+
+# Windows PowerShell 5.1 does not reliably initialize $PSScriptRoot while
+# evaluating default expressions inside param(...).  Resolve the default only
+# after parameter binding has completed.
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot "..\test-results"
 }
 
 $ExpectedHashes = @{
