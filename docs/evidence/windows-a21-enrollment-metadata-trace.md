@@ -5,9 +5,10 @@ enrollment capture.  It observes the exact Dell/Broadcom A21 x64 biometric
 stack at function boundaries so that a successful Windows enrollment can be
 compared with the Linux path without recording fingerprint or template bytes.
 
-No runtime result is claimed in this document yet.  It describes the pinned,
-reviewed tracer and the evidence fields that a future Windows VM run will
-produce.
+The first runtime result below is an intentionally incomplete enrollment
+control.  It establishes dispatch and retry behavior but exited before
+completion or commit, so it must not be cited as successful-enrollment
+evidence.
 
 ## Pinned artifacts and hook site
 
@@ -81,8 +82,9 @@ Prerequisites:
 3. Matching x64 Frida CLI tools are already installed in the Windows VM.
 4. An elevated Windows PowerShell is open in a checkout of this repository.
 
-Open Windows Hello fingerprint settings and touch the sensor once so the
-adapter pipeline is loaded.  Then run:
+Open Windows Hello fingerprint setup far enough to load the adapter pipeline,
+but do not leave an outstanding capture while attaching.  Cancel that setup
+screen without touching the sensor, then immediately run:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\tools\run_windows_a21_enrollment_trace.ps1 -ConfirmPrivacySafeTrace
@@ -102,10 +104,69 @@ Wait for:
 cv2win event=trace-ready action=start_Windows_Hello_enrollment
 ```
 
-Perform exactly one enrollment attempt, then press `Ctrl+C` after Windows
-reports success or failure.  The metadata-only log is written under
+Perform exactly one enrollment attempt.  After Windows reports success or
+failure, type `exit` at Frida's prompt to detach cleanly.  The metadata-only
+log is written under
 `test-results/`.  Use separate trace processes for a successful control and
 a failed control; do not concatenate multiple attempts into one session.
+
+## First runtime: incomplete generic-path control
+
+The first live run used Frida `17.17.0` and the three pinned A21 modules above
+on the passed-through Latitude 7390 `0a5c:5833`.  It ran in the same Windows
+boot session after an earlier Frida detach and `WbioSrvc` restart; it was not a
+cold-boot baseline.
+
+The privacy-safe event sequence was:
+
+```text
+CaptureStart success, output20 nonzero
+CaptureStart success, output20 nonzero
+Update 1: generic-0x6c, status 0x00, completion zero
+CaptureStart success, output20 nonzero
+Update 2: generic-0x6c, status 0x89, completion zero
+CaptureStart success, output20 nonzero
+Update 3: generic-0x6c, status 0x89, completion zero
+CaptureStart success, output20 nonzero
+Update 4: generic-0x6c, status 0x89, completion zero
+CaptureStart success, output20 nonzero
+Update 5: generic-0x6c, status 0x00, completion zero
+CaptureStart success, output20 nonzero
+manual detach before the next UpdateEnrollment call
+```
+
+Every observed UpdateEnrollment input matched the most recent CaptureStart
+twenty-byte output.  The caller reused its input and output storage addresses
+after the first call.  The twenty-byte update output changed from zero to
+nonzero on the first successful update and remained classified nonzero; the
+four-byte output and completion byte remained zero throughout.
+
+No commit or discard hook fired before manual detach.  Because the run ended
+after a seventh CaptureStart and before the corresponding update, it proves
+neither completion behavior nor commit selection.
+
+The route hook is direct runtime evidence that this A21 session selected the
+generic command-`0x6c` branch, not the statically recovered BCM5880
+host-template helper.  The three `0x89` returns were each followed by a fresh,
+successful CaptureStart instead of enrollment termination.  This independently
+confirms on `0a5c:5833` that `0x89` is a live retry/bad-capture class and must
+not be repurposed as an alternate success-status comparison slot.
+
+## Post-run recovery observation
+
+The tracer detached while Windows Hello still had an unfinished enrollment
+operation.  A later guest reboot stalled; libvirt force-off completed only
+after a delay.  The ControlVault USB function was then absent on the Linux
+host (neither `5833` nor fallback `5831`) until a complete host shutdown and
+power cycle restored normal `0a5c:5833` enumeration.
+
+This is a recoverable USB/power-state observation, not brick evidence.  The
+trace contains no firmware-write operation.  It also does not isolate whether
+the stall was caused by the unfinished Hello operation, Frida detachment,
+legacy WUDF/lower-filter power handling, QEMU USB pass-through, or their
+interaction.  Future runs must complete or explicitly cancel Hello, detach
+Frida with `exit`, and verify the biometric session is idle before guest
+shutdown.
 
 ## Evidence interpretation
 
