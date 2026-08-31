@@ -235,6 +235,41 @@ which returns it unchanged to EngineAdapter. Thus Linux and Windows use the
 same Broadcom CV API status domain at this boundary. Equality of the exact
 on-wire status representation remains unproven without USB capture.
 
+### Recovered generic Windows call arguments
+
+The A21 EngineAdapter's call at RVA `0x31c1` supplies:
+
+```text
+argument 1  EngineContext + 0x18      fixed 20-byte input
+argument 2  stack                     completion output
+argument 3  inner context + 0x2c      fixed 20-byte output
+argument 4  false                     disable optional auxiliary data
+argument 5  stack                     4-byte output
+```
+
+Attach allocates the 0x290-byte EngineContext with `HEAP_ZERO_MEMORY`.
+EngineAdapter itself does not directly populate the 20-byte range, but the
+cross-adapter writer is now recovered: in Advanced mode SensorAdapter copies
+the 20-byte `CSS_FingerprintCaptureStart` output from `SensorContext+0x5c` to
+`EngineContext+0x18` before UpdateEnrollment.
+
+Because argument 4 is false, `CSS_FingerprintUpdateEnrollment` forwards
+auxiliary size zero and pointer null. Its internal generic dispatcher
+registers argument 1 as a 20-byte input and builds command `0x6c`. This has the
+same seven-argument shape as Linux and the same semantic input source. Linux
+received a fresh capture-derived 20-byte value on every hardware call, while
+Windows refreshes a fixed context field from each Advanced capture-start
+output.
+
+This rules out optional auxiliary input as the missing Windows state on the
+generic path. A fail-closed hardware test subsequently showed that a stable
+zero Linux input accepts no updates (`0x89` seven times, then `0x88`), while an
+adjacent fresh-input control accepts three before returning `0x59`. Stable zero
+is therefore not the Windows-equivalent fix. See
+[the hardware record](evidence/zero-update-input-hardware.md),
+[the corrected Windows A21 argument record](evidence/windows-a21-update-arguments-static.md),
+and [the cross-adapter dataflow](evidence/windows-a21-update-input-dataflow.md).
+
 ## Windows BCM5880-specific update path
 
 The generic conclusion above needs an important qualification. In

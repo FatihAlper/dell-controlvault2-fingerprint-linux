@@ -2,9 +2,10 @@
 
 ## Scope and binary identities
 
-This is a read-only static analysis of the missing BCM5880 enrollment
-completion path. No driver, interposer, fixture, firmware, or proprietary
-binary was changed; no build or hardware test was run.
+This document began as a read-only static analysis of a candidate BCM5880
+enrollment completion path. Later privacy-safe Windows runtime controls are
+included to distinguish code which exists in A21 from code actually observed
+on the tested Latitude 7390. No proprietary binary or firmware is distributed.
 
 Inputs:
 
@@ -498,106 +499,176 @@ three-sample boundary—but it chooses the generic Linux commit mechanism
 without the selected path's data and retained state. It also removes
 `0xa4`'s retry handling, an independent regression.
 
-## Most likely missing component
+## Runtime correction to the selected-path hypothesis
 
-The highest-confidence answer is:
+The selected A21 path above is real static code, but it is not the path
+observed in the successful Windows runtime control on this exact device. The
+successful USB sequence contained four accepted generic-looking `0x6c`
+updates followed by two `0x6e` operations and no visible `0x6f` header.
 
-> Linux lacks the BCM5880 host-side enrollment transaction coordinator:
-> it must retrieve each capture's feature blob, retain three variable-length
-> features, combine those three plus the fourth live feature through the
-> existing `cv_fingerprint_create_template`/`0x6f` primitive, retain the
-> resulting template and template-ready state, create the 20-byte commit
-> token, set completion one only after template creation succeeds, and use
-> a matching BCM5880 host-template commit path rather than blindly issuing
-> generic `0x6e`.
+Two independent failed Windows controls provide the complementary sequence:
+three `0x6c` requests received 124-byte replies, the fourth received a
+76-byte protected reply, and Windows discarded with `0x6d`. It did not repeat
+the fourth update or select the visible `0x6f` path. Because the protected
+reply body was not decoded, it cannot be numerically equated to Linux status
+`0x59`; only the structural three-accepted/fourth-rejected boundary is proven.
 
-This is proven as the behavior of the A21 Windows selected path and proven
-absent as an integrated path in the Linux DSO. That the Latitude 7390 would
-select this Windows path at runtime remains a strong inference rather than
-runtime proof.
+Consequently the selected host-template coordinator is an alternate static
+candidate, not the highest-confidence explanation for current Linux runtime
+failure. The immediate missing fact is why the fourth generic `0x6c` succeeds
+in one session and fails in others, and why Linux repeatedly reaches raw
+`0x59` at the analogous boundary.
 
-## Ranked solution options
+## Mock-only coordinator scaffold
 
-### 1. Reuse exported Linux primitives with a clean host coordinator
+A callback-injected coordinator core now models the selected path's proven
+host state without resolving driver symbols or sending hardware commands. It
+validates the 20-byte enrollment ID, bounds three stored feature records to
+`0x258` bytes each, passes a fourth live record to a mock template callback,
+and retains a bounded `0x708`-byte template. Even on success it enters a
+terminal `TEMPLATE_READY_COMMIT_BLOCKED` state; no commit operation exists in
+the interface.
+
+Both compile time and runtime require explicit mock-only gates. This provides
+testable state ownership, ordering, overflow, status, token, and cleanup
+semantics, but does not promote the selected path to a hardware candidate.
+See [the mock scaffold record](evidence/bcm5880-coordinator-mock.md).
+
+## Ranked next work
+
+### 1. Compare generic `0x6c` state above the protection boundary
 
 Rank: first.
 
-Feasibility is medium. Linux exports capture-result and
-`cv_fingerprint_create_template` primitives, and the latter emits the needed
-`0x6f`. Unknowns are the exact capture mode/result buffer contract, maximum
-feature length, selected commit helper equivalent, token format, and cleanup
-ordering. Data corruption risk is manageable only with strict length,
-session-ID, and lifecycle validation. An interposer can prototype update
-coordination, but safely testing commit likely requires a repository-local
-host coordinator rather than forcing the existing generic state.
+The on-wire structural portion is complete. Across both decisive Linux runs,
+the only changing request range was the 20 bytes at request offsets 64--83,
+and it matched offsets 52--71 of the immediately preceding `0x66` response on
+every update, including the update that returned `0x59`. A stale or mismatched
+capture ID is therefore not supported.
 
-### 2. Clean-room implementation of the minimum Windows host path
+Windows success and two Windows failures used the same four-request header,
+length, and flag shape. Their first structural divergence was the fourth
+response: 124 bytes on success and 76 bytes on both failures. The variable
+Windows request regions are protected, so the wire capture cannot compare
+their semantics. The next instrumentation must remain above that protection
+boundary and record only capture mode, session/enrollment ID lifetime, update
+input length, output-buffer provenance, counters, and whether accepted output
+is fed into the next call. It must not log buffer contents.
+
+The Linux call-level portion is now also complete. In a 20-update hardware
+trace, all calls used auxiliary-input length zero. Each call received a fresh
+capture-ID pointer and fresh 20-byte value. Each of the three native successes
+wrote a nonzero 20-byte enrollment output and zeroed the 32-bit output value,
+while completion remained zero. The next call received a different, newly
+zeroed output buffer; neither its capture ID nor any length-bearing auxiliary
+input carried the previous output. Native `0x89` and the final native `0x59`
+left all output fields unchanged.
+
+This runtime result agrees with the static Linux task layout: incomplete
+progress is reported through synthetic `0x8f`, while only the final native
+completion path retains update output for generic commit. It does not prove
+that intermediate output must be fed back to generic `0x6c`, because the
+firmware may maintain an internal accumulator.
+
+The corresponding Windows static comparison is now complete. A21
+EngineAdapter passes a fixed `EngineContext+0x18` 20-byte input, hard-codes the
+optional auxiliary-data flag false, and supplies a persistent 20-byte output
+at `inner+0x2c`. Advanced StartCapture refreshes that fixed input field from
+the 20-byte `CSS_FingerprintCaptureStart` output through SensorAdapter. The CSS
+wrapper forwards auxiliary size zero and pointer null to the generic `0x6c`
+dispatcher. See [the static Windows argument record](evidence/windows-a21-update-arguments-static.md)
+and [the cross-adapter dataflow](evidence/windows-a21-update-input-dataflow.md).
+
+This rules out hidden auxiliary data and input semantics as the generic
+Windows/Linux difference. The bounded input experiment confirms the recovered
+dataflow: stable zero accepted no updates
+(`0x89` seven times, then `0x88`); an adjacent original-input control accepted
+three before the established `0x59` boundary. Neither completed or committed.
+See [the hardware record](evidence/zero-update-input-hardware.md). Pointer
+lifetime is not the missing behavior; the next engineering target is the
+BCM5880 host enrollment coordinator described below.
+
+### 2. Re-arm after each accepted incomplete Linux update — completed
 
 Rank: second.
 
-Feasibility is medium-low but suitable for a permanent source driver. It
-requires reconstructing the feature acquisition ABI and the special commit
-operation, not copying proprietary code. It offers explicit ownership,
-locking, bounds, cancellation, and fail-closed behavior. Template corruption
-risk is high until the selected commit payload and storage invariants are
-proven.
+The fail-closed `fresh-rearm-stop-before-commit` policy answered this question
+twice: native `0x8a` after accepted incomplete progress allowed every following
+fresh `0x66` to complete. Both decisive sessions still returned native `0x59`
+after three accepted updates. Re-arm fixes capture continuation but not the
+fourth-update boundary.
 
-### 3. Enable an existing complete Linux 5880 path
+### 3. Retain the selected `0x6f` path as an alternate implementation lead
 
-Rank: third because the required path was not found.
+Rank: third.
 
-The Linux binary has an `is5880` false stub, orphaned 5880 globals, and
-low-level helpers, but no selected update/commit coordinator or three-feature
-buffer. Changing the stub cannot activate code which is absent. This option
-becomes viable only if another Broadcom Linux build containing the complete
-path is located and binary-diffed.
+Linux exports capture-result and create-template primitives, and static A21
+analysis proves a complete host-template coordinator exists. Reconstructing
+that path remains useful if generic `0x6c` state cannot be made equivalent,
+but runtime evidence no longer justifies implementing it first.
 
 ### 4. Force completion or state 2
 
 Rank: unsafe; reject.
 
-Current hardware evidence proves completion zero, enrollment output zero,
-and a stale 4-byte output. Forcing completion or state 2 would invoke generic
-commit without a created/retained template and without a valid matched token.
-This has the highest template corruption and commit-state risk and does not
-reproduce Windows.
+Current Linux hardware evidence has completion zero and no validated token.
+Forcing state 2 can invoke generic commit without matching retained state and
+does not reproduce either observed Windows sequence.
 
-## Minimal next experiment design — not implemented
+## Accepted-incomplete re-arm experiment — completed
 
-The next experiment should answer only whether the native Linux primitives
-can reproduce the selected update half safely. It must not commit.
+The experiment isolated one question: does `0x8a` after an accepted incomplete
+update allow the following fresh `0x66` capture to complete reliably?
 
-1. Interpose the enrollment capture/update boundary, not generic commit.
-2. Obtain each current feature through a proven native capture-result API;
-   do not infer bytes from `0x59` output buffers.
-3. Validate the feature length is nonzero and no larger than the selected
-   slot capacity before copying.
-4. Bind all records to one handle and one 20-byte capture/enrollment ID.
-5. Retain exactly three feature records; use the fourth live record with the
-   same real `cv_fingerprint_create_template` function resolved from the
-   verified local-scope target.
-6. Provide a bounded output buffer and let native command `0x6f` fill the
-   template and length.
-7. Stop before Linux state 2 unless all invariants hold:
-   - four valid nonempty feature records;
-   - command `0x6f` native status `0x00`;
-   - returned template length nonzero and within capacity;
-   - template bytes changed within bounds;
-   - a native, understood commit token and matching commit state exist.
-8. On any failure, zero and release repository-owned feature/template
-   buffers, cancel once, discard through the appropriate known path, and
-   never synthesize status zero.
+1. Start one new enrollment session in a fresh process.
+2. Issue one `0x6c` per newly completed capture. When it returns native zero
+   with completion zero, call native `0x8a` exactly once before returning to
+   the unchanged state machine and its next `0x66`.
+3. Record only command order, native status, completion byte, output/token
+   provenance, and buffer lengths. Redact all biometric payload bytes.
+4. Do not translate `0x59` to `0x89`, repeat the same `0x6c`, synthesize
+   success, or force state 2.
+5. Retain the already validated `0x89 -> 0x8a` recovery. On any other rejected
+   update, cancel/discard once through the existing cleanup path and end that
+   attempt.
+6. If a fourth update returns native zero with nonzero completion, intercept
+   before generic commit and verify that the completion output and token were
+   written by the native call. Without those invariants, discard and stop.
+7. Limit the run to one attempt. A later commit/verification test requires
+   separate review of the captured completion state.
 
-Required logs are selector evidence, session/capture ID identity, feature
-index and length (not biometric payload bytes), `0x6f` start/result, template
-length, completion source, token provenance, every invariant result, and
-cleanup. Raw biometric feature or template bytes should not be written to
-ordinary logs.
+Limit accepted progress to four fresh updates. This design matches the
+between-capture re-arm shape of the successful Windows control and cannot
+accidentally loop past the completion boundary.
 
-Because the selected Windows commit is not generic `0x6e`, a first
-experiment should end after proving template creation and cleanup. A later
-commit experiment requires separate static reconstruction and explicit
-authorization.
+The repository-local `fresh-rearm-stop-before-commit` policy implements this
+boundary and passes mock tests. Its first hardware control produced five native
+`0x89` results, so every observed `0x8a` was ordinary bad-capture recovery.
+Clean cancellation issued `0x68`, two `0x6d` operations, and close `0x04`;
+no completion or commit opcode was reached.
+
+A second hardware control exercised the accepted-incomplete branch three
+times. After each native status-zero/completion-zero update, native `0x8a`
+succeeded and the following fresh `0x66` capture completed. This directly
+answers the experiment's narrow question: the added re-arm is sufficient to
+continue fresh capture after accepted incomplete progress on this stack.
+
+The following update, at the fourth-update boundary after three accumulated
+progress samples, returned native `0x59`. The policy did
+not replay that `0x6c`, synthesize success, force state 2, or reach `0x6e` or
+`0x6f`. Existing cleanup completed and the device closed normally. Therefore
+the capture hang caused by a missing between-update `0x8a` and the native
+fourth-update `0x59` are separate problems.
+
+An independent 2026-08-19 session reproduced this result. Its eight updates
+comprised four native `0x89` quality retries, three native
+status-zero/completion-zero acceptances, and a final native `0x59`. The seven
+nonterminal updates were each followed by successful native `0x8a`; each next
+fresh capture completed. The USB trace contained eight request/response pairs
+for each of `0x66`, `0x6c`, and `0x8a`, with three 96-byte accepted-progress
+`0x6c` replies, five 44-byte non-success replies, 318 packets, and zero drops.
+The policy again performed no replay, synthetic completion, state forcing, or
+commit, and normal cleanup closed the device.
 
 ## Evidence classification
 
@@ -609,6 +680,36 @@ authorization.
 - Completion remained `0x00`.
 - The 20-byte enrollment output remained zero.
 - State 2 and commit were not reached.
+- One Windows runtime enrollment accepted four `0x6c` updates and then used
+  two differently shaped `0x6e` operations before Hello reported success. A
+  later minimal function trace independently observed four zero-status updates
+  followed by two zero-status CommitEnrollment calls and Hello success; no
+  CommitFeatureSet or discard call ran.
+- Two Windows controls independently accepted three updates, returned a
+  shorter protected reply for the fourth, and discarded with `0x6d`.
+- A later control reset from `0a5c:5833` to single-interface `0a5c:5831`;
+  standard USB reset retained `5831`, while complete power-off restored all
+  `5833` interfaces.
+- One Linux fresh-boundary run reached accepted `1/10`, then issued a fresh
+  `0x66` without an intervening `0x8a`. Four lift-and-touch attempts did not
+  complete that capture. No `0x6e` or `0x6f` was reached, and the device
+  remained `0a5c:5833`.
+- The first accepted-incomplete re-arm control returned native `0x89` for all
+  five samples. All five ordinary `0x89 -> 0x8a -> 0x66` recoveries succeeded;
+  cancellation and close were clean, with no commit opcode.
+- A second accepted-incomplete re-arm control obtained three native
+  status-zero/completion-zero updates. Each added `0x8a` succeeded and each
+  following fresh `0x66` completed, eliminating the earlier capture hang.
+- The next fresh update at the four-update boundary returned native `0x59`.
+  It was preserved without same-update replay, state forcing, or commit;
+  cleanup and close completed normally and the device remained `0a5c:5833`.
+- An independent 2026-08-19 run reproduced three accepted-incomplete updates
+  followed by native `0x59`, including successful `0x8a` continuation after
+  every accepted update. Its 318-packet USB trace had zero drops and normal
+  cleanup, with no replay or commit.
+- A separate two-finger control with explicit lift cycles returned sixteen
+  consecutive native `0x89` results. Every ordinary recovery succeeded and
+  cancellation/close were clean; the 560-packet USB trace had zero drops.
 
 ### Proven by static analysis
 
@@ -626,14 +727,22 @@ authorization.
 
 ### Strong inference
 
-- The repeated Linux three-sample boundary is caused by running the generic
-  `0x6c` path on hardware for which A21 intended the selected host path.
+- The Linux `0x59` boundary and the Windows rejected-fourth-update boundary
+  are likely related to final-sample or accumulator consistency, but protected
+  Windows content prevents a numeric status mapping.
+- Because native `0x8a` now matches the successful Windows between-capture
+  shape while Linux still returns `0x59` on the fourth update, the remaining
+  divergence is more likely in initialization, captured-update input, or
+  accumulated session state than in the absence of re-arm alone.
 - Historical `0x8d`/`0x24` commit errors may result from entering generic
   commit without selected-path template state.
 
 ### Still unproven
 
-- Which branch A21 selects on this Latitude 7390 at Windows runtime.
+- The exact A21 dispatcher branch selected internally; visible USB traffic is
+  consistent with the generic `0x6c`/`0x6e` family.
+- Whether the rejected Windows fourth reply contains a status corresponding
+  to Linux `0x59`.
 - The exact Linux API needed to retrieve the same current feature bytes.
 - The complete selected commit payload/operation semantics.
 - Correct completion and template generation on this device under Linux.

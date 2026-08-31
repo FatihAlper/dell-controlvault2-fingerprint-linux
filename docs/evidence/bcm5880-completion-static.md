@@ -18,6 +18,9 @@ e157fbe548bfd2b6b1ee4410b5dc93255409b329bbe4d75da9d7c1684fa1db4e
 
 30c556a9b542d0fcf29a6822b3bb81fe23ce2917b403b3f25af9384e0e31e524
   extracted bipdll.dll
+
+dfb30d81de42e726477b103412fba2c88abd9b675ead7141f25063a3ac8d4e6c
+  extracted BrcmSensorAdapter.dll
 ```
 
 ## Hardware log facts
@@ -148,3 +151,10 @@ aggregation, native template creation, token/ready-state lifetime, and a
 matching special commit operation. The existing Linux `0x6f` primitive is
 potentially reusable, but its inputs and commit counterpart must be proven
 before any hardware experiment.
+
+Later cross-adapter analysis also proves that Windows supplies the same kind
+of capture-derived 20-byte UpdateEnrollment input as Linux: Advanced
+SensorAdapter capture copies `CSS_FingerprintCaptureStart` output into the
+fixed EngineContext field consumed by UpdateEnrollment. Pointer lifetime and
+zero substitution are therefore eliminated as missing mechanisms; see
+[the A21 input dataflow](windows-a21-update-input-dataflow.md).

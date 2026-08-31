@@ -284,6 +284,335 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         self.assertEqual(result.stdout.count("command 0x6C"), 1)
         self.assertNotIn("0x59 UpdateEnrollment result received", result.stdout)
 
+    def test_invalid_update_policy_fails_before_hardware_command(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY="not-a-policy",
+            mode="ready-failure",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("invalid CV2_ENROLLMENT_UPDATE_POLICY", result.stdout)
+        self.assertIn("readiness=failed", result.stdout)
+        self.assertNotIn("command 0x6C", result.stdout)
+
+    def test_metadata_trace_is_disabled_by_default(self) -> None:
+        result = self.run_loader(MOCK_FIRST_UPDATE_STATUS="0")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("[cv2-update-metadata] selected=disabled", result.stdout)
+        self.assertNotIn("phase=before", result.stdout)
+        self.assertNotIn("phase=after", result.stdout)
+
+    def test_invalid_metadata_trace_fails_before_hardware_command(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="verbose",
+            mode="ready-failure",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("invalid CV2_UPDATE_METADATA_TRACE", result.stdout)
+        self.assertIn("readiness=failed", result.stdout)
+        self.assertNotIn("command 0x6C", result.stdout)
+
+    def test_metadata_trace_reports_relations_without_values(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="1",
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_SECOND_UPDATE_STATUS="0x59",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="2",
+            MOCK_ZERO_AUXILIARY_INPUT="1",
+            MOCK_CHANGE_ENROLLMENT_ID_EACH_UPDATE="1",
+            MOCK_FIRST_OUTPUT_BYTE="0x53",
+            MOCK_FIRST_OUTPUT_VALUE="0x54555657",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        metadata = "\n".join(
+            line
+            for line in result.stdout.splitlines()
+            if "[cv2-update-metadata]" in line
+        )
+        for marker in (
+            "selected=enabled",
+            "call=1 phase=before handle_relation=first",
+            "enrollment_id_content_relation=first",
+            "auxiliary_size=0 auxiliary_presence=null",
+            "call=1 phase=after native_status=0x0",
+            "completion_post_zero=yes completion_changed=yes",
+            "enrollment_output_changed=yes",
+            "output_value_changed=yes",
+            "call=2 phase=before handle_relation=same",
+            "enrollment_id_pointer_relation=same",
+            "enrollment_id_content_relation=changed",
+            "enrollment_id_matches_previous_output=no",
+            "call=2 phase=after native_status=0x59",
+        ):
+            self.assertIn(marker, metadata)
+        self.assertNotIn("0x53", metadata)
+        self.assertNotIn("0x54555657", metadata)
+
+    def test_metadata_trace_detects_previous_output_as_next_id(self) -> None:
+        result = self.run_loader(
+            CV2_UPDATE_METADATA_TRACE="1",
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_SECOND_UPDATE_STATUS="0x59",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="2",
+            MOCK_COPY_OUTPUT_TO_NEXT_ID="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "call=2 phase=before handle_relation=same",
+            result.stdout,
+        )
+        self.assertIn(
+            "enrollment_id_matches_previous_output=yes",
+            result.stdout,
+        )
+
+    def test_fresh_policy_preserves_0x59_without_replay(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY="fresh-stop-before-commit",
+            MOCK_FIRST_UPDATE_STATUS="0x59",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for marker in (
+            "selected=fresh-stop-before-commit",
+            "native UpdateEnrollment status=0x59",
+            "preserving native 0x59 without same-update replay",
+            "callback status=0x59 state=1",
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            "final_status=0x59",
+        ):
+            self.assertIn(marker, result.stdout)
+        self.assertEqual(result.stdout.count("command 0x6C"), 1)
+        self.assertNotIn("retrying the same UpdateEnrollment", result.stdout)
+
+    def test_fresh_policy_passes_incomplete_native_success(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY="fresh-stop-before-commit",
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("native UpdateEnrollment status=0x0", result.stdout)
+        self.assertIn("final_status=0x0", result.stdout)
+        self.assertIn("counters update=1", result.stdout)
+        self.assertNotIn("blocking state 2", result.stdout)
+        self.assertNotIn("fatal discard", result.stdout)
+
+    def test_fresh_policy_blocks_native_completion_before_commit(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY="fresh-stop-before-commit",
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        markers = [
+            "command 0x6C status=0x0",
+            "native completion=0x01",
+            "native completion boundary observed; blocking state 2 and "
+            "generic commit",
+            "existing fatal capture-cancel path",
+            "callback status=0x100003 state=1",
+            "existing fatal discard path",
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            "final_status=0x100003",
+        ]
+        positions = [result.stdout.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions), result.stdout)
+        self.assertEqual(result.stdout.count("command 0x6C"), 1)
+
+    def test_fresh_rearm_policy_rearms_accepted_incomplete_update(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        markers = [
+            "command 0x6C status=0x0",
+            "accepted incomplete update; accepted=1/4",
+            "re-arming accepted incomplete enrollment with command 0x8A",
+            "command 0x8A status=0x0",
+            "0x8A completed successfully",
+            "callback status=0x0 state=1",
+            "counters update=1 enrollment_started=1 capture=0 "
+            "cancel=0 discard=0",
+            "final_status=0x0",
+        ]
+        positions = [result.stdout.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions), result.stdout)
+
+    def test_fresh_rearm_policy_blocks_completion_before_rearm(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("blocking state 2 and generic commit", result.stdout)
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertNotIn("command 0x8A", result.stdout)
+
+    def test_fresh_rearm_policy_fails_closed_on_rearm_error(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_REARM_STATUS="0x42",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("0x8A failed with status 0x42", result.stdout)
+        self.assertIn("final_status=0x42", result.stdout)
+        self.assertIn(
+            "counters update=1 enrollment_started=1 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+
+    def test_fresh_rearm_policy_stops_at_four_incomplete_updates(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "fresh-rearm-stop-before-commit"
+            ),
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SECOND_UPDATE_STATUS="0",
+            MOCK_SECOND_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="4",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("accepted incomplete update; accepted=4/4", result.stdout)
+        self.assertIn(
+            "accepted-update limit reached without native completion; "
+            "blocking another capture",
+            result.stdout,
+        )
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=4 enrollment_started=3 capture=3 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertEqual(result.stdout.count("command 0x8A status=0x0"), 3)
+        self.assertEqual(result.stdout.count("command 0x66 status=0x0"), 3)
+
+    def test_zero_input_policy_substitutes_one_stable_zero_buffer(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "zero-input-fresh-rearm-stop-before-commit"
+            ),
+            CV2_UPDATE_METADATA_TRACE="1",
+            MOCK_REQUIRE_ZERO_ENROLLMENT_ID="1",
+            MOCK_MUTATE_FIRST_ENROLLMENT_ID="1",
+            MOCK_INITIAL_ENROLLMENT_ID_BYTE="0x7a",
+            MOCK_CHANGE_ENROLLMENT_ID_EACH_UPDATE="1",
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_SECOND_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="0",
+            MOCK_SECOND_COMPLETION="0",
+            MOCK_SEQUENTIAL_UPDATE_COUNT="2",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for marker in (
+            "selected=zero-input-fresh-rearm-stop-before-commit",
+            "native UpdateEnrollment call=1/24 input=stable-zero-20 "
+            "source_bytes_read=no",
+            "native UpdateEnrollment call=2/24 input=stable-zero-20 "
+            "source_bytes_read=no",
+            "call=2 phase=before handle_relation=same",
+            "enrollment_id_pointer_relation=same",
+            "enrollment_id_content_relation=same",
+            "mutated first update input",
+            "accepted incomplete update; accepted=2/4",
+            "counters update=2 enrollment_started=2 capture=1 "
+            "cancel=0 discard=0",
+        ):
+            self.assertIn(marker, result.stdout)
+        self.assertEqual(result.stdout.count("update input_zero=yes"), 2)
+        self.assertNotIn("0x7a", result.stdout.lower())
+        self.assertNotIn("retrying the same UpdateEnrollment", result.stdout)
+
+    def test_zero_input_policy_blocks_completion_before_commit(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "zero-input-fresh-rearm-stop-before-commit"
+            ),
+            MOCK_REQUIRE_ZERO_ENROLLMENT_ID="1",
+            MOCK_INITIAL_ENROLLMENT_ID_BYTE="0x7a",
+            MOCK_FIRST_UPDATE_STATUS="0",
+            MOCK_FIRST_COMPLETION="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("update input_zero=yes", result.stdout)
+        self.assertIn("blocking state 2 and generic commit", result.stdout)
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertNotIn("command 0x8A", result.stdout)
+
+    def test_zero_input_policy_preserves_native_0x59_without_replay(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "zero-input-fresh-rearm-stop-before-commit"
+            ),
+            MOCK_REQUIRE_ZERO_ENROLLMENT_ID="1",
+            MOCK_INITIAL_ENROLLMENT_ID_BYTE="0x7a",
+            MOCK_FIRST_UPDATE_STATUS="0x59",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for marker in (
+            "update input_zero=yes",
+            "native UpdateEnrollment status=0x59",
+            "preserving native 0x59 without same-update replay",
+            "counters update=1 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            "final synthetic outputs completion=0x31 output_byte=0x40 "
+            "output_value=0x51525354",
+            "final_status=0x59",
+        ):
+            self.assertIn(marker, result.stdout)
+        self.assertEqual(result.stdout.count("command 0x6C"), 1)
+        self.assertNotIn("retrying the same UpdateEnrollment", result.stdout)
+        self.assertNotIn("command 0x8A", result.stdout)
+
+    def test_zero_input_policy_rejects_null_source_before_native_call(self) -> None:
+        result = self.run_loader(
+            CV2_ENROLLMENT_UPDATE_POLICY=(
+                "zero-input-fresh-rearm-stop-before-commit"
+            ),
+            MOCK_NULL_ENROLLMENT_ID="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("required source input is null", result.stdout)
+        self.assertIn("final_status=0x100003", result.stdout)
+        self.assertIn(
+            "counters update=0 enrollment_started=0 capture=0 "
+            "cancel=1 discard=1",
+            result.stdout,
+        )
+        self.assertNotIn("command 0x6C", result.stdout)
+
     def test_0x8a_failure_uses_existing_fatal_paths_once(self) -> None:
         result = self.run_loader(
             MOCK_FIRST_UPDATE_STATUS="0x89",
@@ -508,6 +837,15 @@ class Enrollment089ExperimentTests(unittest.TestCase):
         self.assertIn(
             "experiment=bounded single repeated UpdateEnrollment after "
             "native 0x59",
+            runner,
+        )
+        self.assertIn(
+            "multiple enrollment boundary modes selected; refusing ambiguity",
+            runner,
+        )
+        self.assertIn("--trace-update-metadata", runner)
+        self.assertIn(
+            'export CV2_UPDATE_METADATA_TRACE="$TRACE_METADATA"',
             runner,
         )
 
